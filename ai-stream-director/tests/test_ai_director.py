@@ -33,6 +33,14 @@ class AIDirectorReadinessTests(unittest.TestCase):
             ):
                 AIDirector("http://ollama:11434", "gemma3:4b").check_readiness()
 
+    def test_readiness_rejects_unexpected_tags_response_shape(self) -> None:
+        response = Mock()
+        response.json.return_value = []
+
+        with patch("ai_director.requests.get", return_value=response):
+            with self.assertRaisesRegex(AIDirectorError, "model list was missing"):
+                AIDirector("http://ollama:11434", "gemma3:4b").check_readiness()
+
 
 class AIDirectorDecisionTests(unittest.TestCase):
     def test_decide_rejects_missing_ollama_response_field(self) -> None:

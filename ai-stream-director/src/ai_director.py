@@ -46,6 +46,11 @@ class AIDirector:
                 "Ollama responded to /api/tags, but the response was not valid JSON."
             ) from exc
 
+        if not isinstance(payload, dict):
+            raise AIDirectorError(
+                "Ollama responded to /api/tags, but the model list was missing."
+            )
+
         models = payload.get("models")
         if not isinstance(models, list):
             raise AIDirectorError(
