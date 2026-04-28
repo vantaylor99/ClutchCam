@@ -2,9 +2,10 @@ import queue
 import sys
 import threading
 import time
+from collections.abc import Iterable
 
 from ai_director import AIDirector, AIDirectorError
-from config import get_config
+from config import SCENES, get_config
 from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
 from transcript_router import TranscriptRouter
@@ -71,6 +72,17 @@ def main() -> int:
 
     try:
         obs_controller.connect()
+        if not config.dry_run_obs:
+            missing_scenes = find_missing_scenes(
+                available_scenes=obs_controller.list_scenes(),
+                required_scenes=SCENES.values(),
+            )
+            if missing_scenes:
+                print("OBS is missing required scenes:")
+                for scene_name in missing_scenes:
+                    print(f"  - {scene_name}")
+                print("Create or rename the OBS scenes so they match exactly.")
+                return 1
         scheduler.start()
     except Exception as exc:
         if config.dry_run_obs:
@@ -110,6 +122,14 @@ def main() -> int:
         return 0
 
     return 0
+
+
+def find_missing_scenes(
+    available_scenes: Iterable[str],
+    required_scenes: Iterable[str],
+) -> list[str]:
+    available = set(available_scenes)
+    return [scene_name for scene_name in required_scenes if scene_name not in available]
 
 
 def read_terminal_input(input_queue: queue.Queue[str | None]) -> None:

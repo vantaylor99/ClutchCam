@@ -24,6 +24,10 @@ class OBSController:
         self._require_client().set_current_program_scene(scene_name)
         print(f"OBS scene switched to: {scene_name}")
 
+    def list_scenes(self) -> list[str]:
+        result = self._require_client().get_scene_list()
+        return [_scene_name(scene) for scene in result.scenes]
+
     def get_current_scene(self) -> str:
         result = self._require_client().get_current_program_scene()
         return result.current_program_scene_name
@@ -32,6 +36,17 @@ class OBSController:
         if self.client is None:
             raise RuntimeError("OBS client is not connected.")
         return self.client
+
+
+def _scene_name(scene) -> str:
+    if isinstance(scene, dict):
+        return str(scene.get("sceneName", ""))
+
+    scene_name = getattr(scene, "sceneName", None)
+    if scene_name is not None:
+        return str(scene_name)
+
+    return str(getattr(scene, "scene_name", ""))
 
 
 class DryRunOBSController:

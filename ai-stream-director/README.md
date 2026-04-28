@@ -41,6 +41,11 @@ Create these scenes manually in OBS before running the app:
 
 The scene names must match exactly.
 
+On startup, the app connects to OBS WebSocket and validates that all required
+scenes exist before the scheduler starts. If any scene is missing or misspelled,
+startup exits with a list of the missing scene names. `DRY_RUN_OBS=true` skips
+this real OBS validation for local smoke testing.
+
 ## OBS WebSocket Setup
 
 OBS 28+ includes OBS WebSocket by default.
