@@ -32,3 +32,27 @@ class OBSController:
         if self.client is None:
             raise RuntimeError("OBS client is not connected.")
         return self.client
+
+
+class DryRunOBSController:
+    def __init__(self, initial_scene: str):
+        self.current_scene = initial_scene
+        self.connected = False
+
+    def connect(self) -> None:
+        self.connected = True
+        print("DRY_RUN_OBS enabled. Skipping OBS WebSocket connection.")
+        print(f"[DRY RUN OBS] Starting scene: {self.current_scene}")
+
+    def set_scene(self, scene_name: str) -> None:
+        self._require_connection()
+        self.current_scene = scene_name
+        print(f"[DRY RUN OBS] Scene switch: {scene_name}")
+
+    def get_current_scene(self) -> str:
+        self._require_connection()
+        return self.current_scene
+
+    def _require_connection(self) -> None:
+        if not self.connected:
+            raise RuntimeError("Dry-run OBS controller is not connected.")

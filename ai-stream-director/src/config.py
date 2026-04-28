@@ -18,6 +18,7 @@ class AppConfig:
     obs_host: str
     obs_port: int
     obs_password: str
+    dry_run_obs: bool
     ollama_base_url: str
     ollama_model: str
     confidence_threshold: float
@@ -33,6 +34,7 @@ def get_config() -> AppConfig:
         obs_host=os.getenv("OBS_HOST", "host.docker.internal"),
         obs_port=int(os.getenv("OBS_PORT", "4455")),
         obs_password=os.getenv("OBS_PASSWORD", ""),
+        dry_run_obs=_parse_bool(os.getenv("DRY_RUN_OBS", "false")),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "gemma3:4b"),
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.75")),
@@ -42,3 +44,7 @@ def get_config() -> AppConfig:
         transcript_history_messages=int(os.getenv("TRANSCRIPT_HISTORY_MESSAGES", "20")),
         default_scene=SCENES["quad"],
     )
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}

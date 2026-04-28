@@ -68,6 +68,14 @@ Edit `.env` and set your OBS password:
 OBS_PASSWORD=your-obs-websocket-password
 ```
 
+To test without OBS, enable dry-run mode:
+
+```text
+DRY_RUN_OBS=true
+```
+
+Dry-run mode skips the OBS WebSocket connection and prints scene switches to the terminal instead.
+
 The default Ollama model is:
 
 ```text
@@ -153,6 +161,8 @@ The app validates the scene name, confidence, duration, and reason before handin
 
 ## Test Plan
 
+For local smoke testing without OBS, set `DRY_RUN_OBS=true` in `.env` or in your shell. The app should start even when OBS is closed, `/status` should show the current dry-run scene, and manual or AI-driven scene changes should print as `[DRY RUN OBS] Scene switch: ...`.
+
 Start with calm lines. The AI should usually keep `Quad View`.
 
 ```text
@@ -212,6 +222,7 @@ ollama pull gemma3:4b
 $env:OBS_HOST="127.0.0.1"
 $env:OBS_PORT="4455"
 $env:OBS_PASSWORD="your-obs-websocket-password"
+$env:DRY_RUN_OBS="true" # optional: skip OBS WebSocket for local smoke testing
 $env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
 python src/main.py
 ```

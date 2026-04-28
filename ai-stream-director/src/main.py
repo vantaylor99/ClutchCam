@@ -5,7 +5,7 @@ import time
 
 from ai_director import AIDirector
 from config import get_config
-from obs_controller import OBSController
+from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
 from transcript_router import TranscriptRouter
 
@@ -34,11 +34,14 @@ INPUT_CLOSED = None
 def main() -> int:
     config = get_config()
 
-    obs_controller = OBSController(
-        host=config.obs_host,
-        port=config.obs_port,
-        password=config.obs_password,
-    )
+    if config.dry_run_obs:
+        obs_controller = DryRunOBSController(initial_scene=config.default_scene)
+    else:
+        obs_controller = OBSController(
+            host=config.obs_host,
+            port=config.obs_port,
+            password=config.obs_password,
+        )
     ai_director = AIDirector(
         ollama_base_url=config.ollama_base_url,
         model=config.ollama_model,
@@ -64,8 +67,11 @@ def main() -> int:
         obs_controller.connect()
         scheduler.start()
     except Exception as exc:
-        print(f"Could not connect to OBS WebSocket: {exc}")
-        print("Check OBS WebSocket settings and your .env values.")
+        if config.dry_run_obs:
+            print(f"Could not start dry-run OBS controller: {exc}")
+        else:
+            print(f"Could not connect to OBS WebSocket: {exc}")
+            print("Check OBS WebSocket settings and your .env values.")
         return 1
 
     input_queue: queue.Queue[str | None] = queue.Queue()
