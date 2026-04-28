@@ -1,4 +1,6 @@
+import queue
 import sys
+import threading
 import time
 
 from ai_director import AIDirector
@@ -23,6 +25,10 @@ Manual commands:
   /status Show current app state
   /quit   Exit
 """.strip()
+
+
+TICK_INTERVAL_SECONDS = 0.25
+INPUT_CLOSED = None
 
 
 def main() -> int:
@@ -62,45 +68,81 @@ def main() -> int:
         print("Check OBS WebSocket settings and your .env values.")
         return 1
 
+    input_queue: queue.Queue[str | None] = queue.Queue()
+    input_thread = threading.Thread(
+        target=read_terminal_input,
+        args=(input_queue,),
+        daemon=True,
+    )
+    input_thread.start()
+
+    try:
+        while True:
+            scheduler.tick()
+
+            try:
+                line = input_queue.get(timeout=TICK_INTERVAL_SECONDS)
+            except queue.Empty:
+                continue
+
+            if line is INPUT_CLOSED:
+                print()
+                print("Exiting.")
+                return 0
+
+            if process_line(line, transcript_router, ai_director, scheduler):
+                return 0
+    except KeyboardInterrupt:
+        print()
+        print("Exiting.")
+        return 0
+
+    return 0
+
+
+def read_terminal_input(input_queue: queue.Queue[str | None]) -> None:
     while True:
-        scheduler.tick()
         try:
             line = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
-            print("Exiting.")
-            return 0
+            input_queue.put(INPUT_CLOSED)
+            return
 
-        scheduler.tick()
-        if not line:
-            continue
+        input_queue.put(line)
 
-        if line.startswith("/"):
-            if handle_command(line, scheduler):
-                return 0
-            continue
 
-        message = transcript_router.parse_line(line)
-        if message is None:
-            print("Could not parse line. Use format: player_1: transcript text")
-            continue
+def process_line(
+    line: str,
+    transcript_router: TranscriptRouter,
+    ai_director: AIDirector,
+    scheduler: SceneScheduler,
+) -> bool:
+    if not line:
+        return False
 
-        print(f"Transcript accepted from {message.speaker}. Asking AI director...")
-        try:
-            context = transcript_router.get_recent_context_text()
-            decision = ai_director.decide(context)
-        except Exception as exc:
-            print(f"AI decision failed: {exc}")
-            continue
+    if line.startswith("/"):
+        return handle_command(line, scheduler)
 
-        print(
-            "AI decision: "
-            f"{decision.target_scene}, confidence={decision.confidence:.2f}, "
-            f"duration={decision.duration_seconds}s"
-        )
-        scheduler.apply_ai_decision(decision)
+    message = transcript_router.parse_line(line)
+    if message is None:
+        print("Could not parse line. Use format: player_1: transcript text")
+        return False
 
-    return 0
+    print(f"Transcript accepted from {message.speaker}. Asking AI director...")
+    try:
+        context = transcript_router.get_recent_context_text()
+        decision = ai_director.decide(context)
+    except Exception as exc:
+        print(f"AI decision failed: {exc}")
+        return False
+
+    print(
+        "AI decision: "
+        f"{decision.target_scene}, confidence={decision.confidence:.2f}, "
+        f"duration={decision.duration_seconds}s"
+    )
+    scheduler.apply_ai_decision(decision)
+    return False
 
 
 def handle_command(command: str, scheduler: SceneScheduler) -> bool:

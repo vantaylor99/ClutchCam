@@ -1,0 +1,10 @@
+.logs/
+.stop
+.in-progress
+backlog/
+fix/
+plan/
+implement/
+review/
+complete/
+blocked/

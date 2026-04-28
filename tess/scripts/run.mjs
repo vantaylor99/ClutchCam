@@ -234,17 +234,28 @@ const agents = {
 	codex: (instructionFile, _prompt, { cwd }) => {
 		const relPath = relative(cwd, instructionFile).replace(/\\/g, '/');
 		const prompt = `Read and follow all instructions in the file: ${relPath}`;
+		const args = [
+			'exec',
+			'--json',
+			'--color', 'never',
+			'--full-auto',
+			'--ephemeral',
+			'-C', cwd,
+			prompt,
+		];
+		// On Windows, npm installs both an extensionless shim and codex.cmd.
+		// spawn('codex') may hit the extensionless shim first and fail with EPERM.
+		if (process.platform === 'win32') {
+			const localCodex = join(cwd, 'node_modules', '.bin', 'codex.cmd');
+			const escaped = args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(' ');
+			return {
+				shellCmd: `"${localCodex}" ${escaped}`,
+				formatStream: formatCodexJsonLine,
+			};
+		}
 		return {
 			cmd: 'codex',
-			args: [
-				'exec',
-				'--json',
-				'--color', 'never',
-				'--full-auto',
-				'--ephemeral',
-				'-C', cwd,
-				prompt,
-			],
+			args,
 			formatStream: formatCodexJsonLine,
 		};
 	},

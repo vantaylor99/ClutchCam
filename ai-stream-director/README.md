@@ -96,6 +96,8 @@ docker compose run --rm app
 
 ## Terminal Input Format
 
+The terminal prompt runs separately from the scheduler. Scene timers continue to tick while the app waits for transcript lines or manual commands.
+
 Transcript lines should use this format:
 
 ```text
