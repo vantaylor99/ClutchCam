@@ -264,7 +264,7 @@ const agents = {
 		const relPath = relative(cwd, instructionFile).replace(/\\/g, '/');
 		const prompt = `Read and follow all instructions in the file: ${relPath}`;
 		return {
-			shellCmd: `agent --print -f --trust --output-format stream-json --workspace "${cwd}" "${prompt}"`,
+			shellCmd: `agent --print -f --output-format stream-json --workspace "${cwd}" "${prompt}"`,
 			formatStream: formatCursorJsonLine,
 		};
 	},
