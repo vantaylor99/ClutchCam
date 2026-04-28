@@ -3,7 +3,7 @@ import sys
 import threading
 import time
 
-from ai_director import AIDirector
+from ai_director import AIDirector, AIDirectorError
 from config import get_config
 from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
@@ -62,6 +62,12 @@ def main() -> int:
     print("======================")
     print(HELP_TEXT)
     print()
+
+    try:
+        ai_director.check_readiness()
+    except AIDirectorError as exc:
+        print(f"AI director is not ready: {exc}")
+        return 1
 
     try:
         obs_controller.connect()
@@ -138,8 +144,11 @@ def process_line(
     try:
         context = transcript_router.get_recent_context_text()
         decision = ai_director.decide(context)
-    except Exception as exc:
+    except AIDirectorError as exc:
         print(f"AI decision failed: {exc}")
+        return False
+    except Exception as exc:
+        print(f"AI decision failed unexpectedly: {exc}")
         return False
 
     print(

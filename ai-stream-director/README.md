@@ -102,6 +102,12 @@ docker compose run --rm ollama-pull
 docker compose run --rm app
 ```
 
+At startup, the app checks that Ollama is reachable and that `OLLAMA_MODEL` appears in Ollama's model list. If the model is missing, pull it before starting the app:
+
+```powershell
+ollama pull gemma3:4b
+```
+
 ## Terminal Input Format
 
 The terminal prompt runs separately from the scheduler. Scene timers continue to tick while the app waits for transcript lines or manual commands.
@@ -158,6 +164,22 @@ The Ollama prompt asks the model to return JSON only:
 ```
 
 The app validates the scene name, confidence, duration, and reason before handing the result to the scheduler.
+
+The parser also tolerates small formatting mistakes from local models, such as markdown JSON fences, short text before or after the JSON object, and trailing commas. The final decision must still be a JSON object, and unsupported scene names are reset to `Quad View`.
+
+## Troubleshooting
+
+If startup prints `AI director is not ready: Ollama is not reachable`, start Ollama or check `OLLAMA_BASE_URL`.
+
+If startup prints that the configured model is not installed, run:
+
+```powershell
+ollama pull gemma3:4b
+```
+
+Replace `gemma3:4b` with your `OLLAMA_MODEL` value if you changed it.
+
+If a transcript line prints `AI decision failed`, Ollama responded but did not produce a usable final decision object. Try the line again, use a lower-temperature model, or switch to a model that follows JSON instructions more reliably.
 
 ## Test Plan
 

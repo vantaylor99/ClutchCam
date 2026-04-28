@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -15,32 +16,89 @@ class DirectorDecision:
     reason: str
 
 
+class AIDirectorError(RuntimeError):
+    """User-facing AI director failure."""
+
+
 class AIDirector:
     def __init__(self, ollama_base_url: str, model: str, timeout_seconds: int = 60):
         self.ollama_base_url = ollama_base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
 
+    def check_readiness(self) -> None:
+        try:
+            response = requests.get(
+                f"{self.ollama_base_url}/api/tags",
+                timeout=5,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise AIDirectorError(
+                "Ollama is not reachable at "
+                f"{self.ollama_base_url}. Start Ollama or check OLLAMA_BASE_URL."
+            ) from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AIDirectorError(
+                "Ollama responded to /api/tags, but the response was not valid JSON."
+            ) from exc
+
+        models = payload.get("models")
+        if not isinstance(models, list):
+            raise AIDirectorError(
+                "Ollama responded to /api/tags, but the model list was missing."
+            )
+
+        available_models = {
+            name
+            for model_info in models
+            if isinstance(model_info, dict)
+            for name in (model_info.get("name"), model_info.get("model"))
+            if isinstance(name, str)
+        }
+        if self.model not in available_models:
+            raise AIDirectorError(
+                f'Ollama model "{self.model}" is not installed. '
+                f'Run: ollama pull {self.model}'
+            )
+
     def decide(self, transcript_context: str) -> DirectorDecision:
         prompt = self._build_prompt(transcript_context)
-        response = requests.post(
-            f"{self.ollama_base_url}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {
-                    "temperature": 0.2,
+        try:
+            response = requests.post(
+                f"{self.ollama_base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                    "options": {
+                        "temperature": 0.2,
+                    },
                 },
-            },
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise AIDirectorError(
+                "Ollama generation request failed. Check that Ollama is running "
+                f"and model {self.model} is available."
+            ) from exc
 
-        payload = response.json()
-        raw_decision = payload.get("response", "{}")
-        data = json.loads(raw_decision)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AIDirectorError("Ollama returned a non-JSON HTTP response.") from exc
+
+        if not isinstance(payload, dict):
+            raise AIDirectorError("Ollama returned an unexpected response shape.")
+        if "response" not in payload:
+            raise AIDirectorError("Ollama response did not include a decision.")
+        raw_decision = payload["response"]
+        data = self._parse_decision_json(raw_decision)
         return self._normalize_decision(data)
 
     def _build_prompt(self, transcript_context: str) -> str:
@@ -75,6 +133,50 @@ Return exactly this JSON shape:
   "reason": "Short reason."
 }}
 """.strip()
+
+    def _parse_decision_json(self, raw_decision: Any) -> Dict[str, Any]:
+        if isinstance(raw_decision, dict):
+            return raw_decision
+
+        if not isinstance(raw_decision, str):
+            raise AIDirectorError("AI decision response was not a JSON object.")
+
+        text = raw_decision.strip()
+        text = self._strip_markdown_fence(text)
+        text = self._remove_trailing_commas(text)
+        if text.lstrip().startswith("["):
+            raise AIDirectorError("AI decision response was not a JSON object.")
+
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(text):
+            if character != "{":
+                continue
+
+            try:
+                data, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(data, dict):
+                return data
+
+        raise AIDirectorError(
+            "AI decision was not valid JSON. Expected an object with "
+            "target_scene, confidence, duration_seconds, and reason."
+        )
+
+    def _strip_markdown_fence(self, text: str) -> str:
+        fenced = re.fullmatch(
+            r"```(?:json)?\s*(.*?)\s*```",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if fenced is None:
+            return text
+        return fenced.group(1).strip()
+
+    def _remove_trailing_commas(self, text: str) -> str:
+        return re.sub(r",\s*([}\]])", r"\1", text)
 
     def _normalize_decision(self, data: Dict[str, Any]) -> DirectorDecision:
         target_scene = str(data.get("target_scene", SCENES["quad"])).strip()
