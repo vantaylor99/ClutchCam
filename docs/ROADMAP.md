@@ -31,11 +31,12 @@ Deliverables:
 - Local RTMP/SRT media server configuration. First implementation exists as an
   SRS `media-server` Docker Compose service using `ai-stream-director/infra/srs.conf`.
 - FFmpeg-based rolling segment writer using `/dev/shm`. First implementation
-  exists behind `services.buffer` and awaits review.
+  exists behind `services.buffer` and has completed review.
 - Clip resolver that turns `LookbackClipRequest` into concrete media ranges.
-  First implementation exists behind `services.buffer` and awaits review.
+  First implementation exists behind `services.buffer` and has completed
+  review.
 - Fixture mode for repeatable tests without live inputs. First implementation
-  exists behind `services.buffer` and awaits review.
+  exists behind `services.buffer` and has completed review.
 
 Success criteria:
 
@@ -138,7 +139,6 @@ Success criteria:
 
 Active review tickets:
 
-- `tickets/review/6-rolling-lookback-buffer.md`
 - `tickets/review/7-local-media-server-ingest.md`
 
 Active implement tickets: none.

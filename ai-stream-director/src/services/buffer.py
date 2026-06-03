@@ -586,7 +586,10 @@ class FFmpegRollingLookbackBuffer(SegmentedLookbackBuffer):
         path = Path(row[0])
         if not path.is_absolute():
             path = self._stream_dir(stream_id) / path
-        if not path.exists():
+        try:
+            path = path.resolve(strict=True)
+            path.relative_to(self._stream_dir(stream_id).resolve())
+        except (OSError, RuntimeError, ValueError):
             return None
 
         return SegmentRecord(
@@ -638,9 +641,14 @@ def _find_gap(
     records: Sequence[SegmentRecord],
     tolerance_seconds: float,
 ) -> tuple[float, float] | None:
-    for previous, current in zip(records, records[1:]):
-        if current.start_time_seconds > previous.end_time_seconds + tolerance_seconds:
-            return (previous.end_time_seconds, current.start_time_seconds)
+    if not records:
+        return None
+
+    covered_until = records[0].end_time_seconds
+    for current in records[1:]:
+        if current.start_time_seconds > covered_until + tolerance_seconds:
+            return (covered_until, current.start_time_seconds)
+        covered_until = max(covered_until, current.end_time_seconds)
     return None
 
 
@@ -657,7 +665,10 @@ def _is_plausibly_pending(
         + config.segment_duration_seconds
         + config.coverage_tolerance_seconds
     )
-    return request.start_time_seconds <= pending_horizon
+    return (
+        request.start_time_seconds <= pending_horizon
+        and request.trigger_time_seconds <= pending_horizon
+    )
 
 
 def _clip_playlist_name(request: LookbackClipRequest) -> str:

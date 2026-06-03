@@ -165,6 +165,51 @@ class RollingBufferFixtureTests(unittest.TestCase):
             self.assertEqual(result.status, ClipResolutionStatus.PENDING)
             self.assertIn("newer than the latest segment", result.reason)
 
+    def test_far_future_trigger_with_large_preroll_is_unavailable(self) -> None:
+        with _temp_dir() as temp_dir:
+            buffer = FixtureLookbackBuffer(
+                records=(
+                    _write_segment(temp_dir, "player_1", 0, 0.0, 5.0),
+                    _write_segment(temp_dir, "player_1", 1, 5.0, 10.0),
+                ),
+                buffer_root=temp_dir,
+                segment_duration_seconds=2.0,
+            )
+            request = LookbackClipRequest(
+                stream_id="player_1",
+                trigger_time_seconds=100.0,
+                pre_roll_seconds=100,
+                post_roll_seconds=3,
+            )
+
+            result = buffer.resolve_clip(request)
+
+            self.assertEqual(result.status, ClipResolutionStatus.UNAVAILABLE)
+            self.assertIn("ends after retained media", result.reason)
+
+    def test_overlapping_segments_are_merged_for_gap_detection(self) -> None:
+        with _temp_dir() as temp_dir:
+            records = (
+                _write_segment(temp_dir, "player_2", 0, 0.0, 10.0),
+                _write_segment(temp_dir, "player_2", 1, 2.0, 3.0),
+                _write_segment(temp_dir, "player_2", 2, 10.1, 12.0),
+            )
+            buffer = FixtureLookbackBuffer(records=records, buffer_root=temp_dir)
+            request = LookbackClipRequest(
+                stream_id="player_2",
+                trigger_time_seconds=11.0,
+                pre_roll_seconds=11,
+                post_roll_seconds=1,
+            )
+
+            result = buffer.resolve_clip(request)
+
+            self.assertEqual(result.status, ClipResolutionStatus.READY)
+            self.assertEqual(
+                result.segment_uris,
+                tuple(record.media_uri for record in records),
+            )
+
 
 class FFmpegRollingBufferTests(unittest.TestCase):
     def test_ffmpeg_command_uses_configured_runtime_values(self) -> None:
@@ -202,6 +247,27 @@ class FFmpegRollingBufferTests(unittest.TestCase):
 
             popen.assert_not_called()
 
+    def test_refresh_metadata_ignores_segment_paths_outside_stream_dir(self) -> None:
+        with _temp_dir() as temp_dir:
+            stream_dir = Path(temp_dir) / "player_1"
+            stream_dir.mkdir(parents=True)
+            outside_segment = Path(temp_dir) / "outside.ts"
+            outside_segment.write_bytes(b"outside media")
+            (stream_dir / "segments.csv").write_text(
+                f"{outside_segment},0.0,2.0\n",
+                encoding="utf-8",
+            )
+            config = RollingBufferConfig(
+                buffer_root=temp_dir,
+                stream_input_urls={"player_1": "rtmp://localhost/live/player_1"},
+                stream_ids=("player_1",),
+            )
+            buffer = FFmpegRollingLookbackBuffer(config)
+
+            buffer.refresh_metadata("player_1")
+
+            self.assertEqual(buffer.list_segments("player_1"), ())
+
 
 class RollingBufferEnvironmentConfigTests(unittest.TestCase):
     def test_app_config_exposes_buffer_runtime_defaults(self) -> None:
@@ -233,6 +299,16 @@ class RollingBufferEnvironmentConfigTests(unittest.TestCase):
         self.assertEqual(
             config.lookback_input_urls["player_3"],
             "srt://player-three:9000",
+        )
+
+    def test_env_example_documents_buffer_runtime_settings(self) -> None:
+        env_example = (PROJECT_DIR / ".env.example").read_text()
+
+        self.assertIn("LOOKBACK_SEGMENT_SECONDS=2", env_example)
+        self.assertIn("FFMPEG_EXECUTABLE=ffmpeg", env_example)
+        self.assertIn(
+            "LOOKBACK_INPUT_URL_PLAYER_1=rtmp://media-server:1935/live/player_1",
+            env_example,
         )
 
 
