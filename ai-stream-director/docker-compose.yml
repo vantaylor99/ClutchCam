@@ -31,8 +31,9 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
+      GEMMA_MODEL: ${GEMMA_MODEL:-}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
-    command: ["sh", "-c", "ollama pull \"$OLLAMA_MODEL\""]
+    command: ["sh", "-c", "ollama pull \"$${GEMMA_MODEL:-$${OLLAMA_MODEL:-gemma3:4b}}\""]
     restart: "no"
 
   app:

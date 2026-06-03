@@ -35,6 +35,7 @@ class SceneScheduler:
 
     def start(self) -> None:
         self.force_scene(self.default_scene)
+        self.last_switch_time = 0.0
 
     def apply_ai_decision(self, decision: DirectorDecision) -> None:
         if not self.ai_enabled:

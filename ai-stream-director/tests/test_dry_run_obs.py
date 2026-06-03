@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -9,6 +10,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from config import SCENES, get_config  # noqa: E402
+from ai_director import DirectorDecision  # noqa: E402
 from main import find_missing_scenes  # noqa: E402
 from obs_controller import DryRunOBSController, OBSController  # noqa: E402
 from scheduler import SceneScheduler  # noqa: E402
@@ -160,6 +162,57 @@ class DryRunSchedulerIntegrationTests(unittest.TestCase):
         self.assertEqual(controller.get_current_scene(), SCENES["player_1"])
 
         scheduler.force_scene(SCENES["quad"])
+        self.assertEqual(scheduler.status().current_scene, SCENES["quad"])
+        self.assertEqual(controller.get_current_scene(), SCENES["quad"])
+
+    def test_startup_default_scene_does_not_block_first_ai_focus(self) -> None:
+        controller = DryRunOBSController(initial_scene=SCENES["quad"])
+        scheduler = SceneScheduler(
+            obs_controller=controller,
+            default_scene=SCENES["quad"],
+            confidence_threshold=0.75,
+            min_switch_interval_seconds=8,
+            max_focus_duration_seconds=20,
+        )
+        decision = DirectorDecision(
+            target_scene=SCENES["player_3"],
+            confidence=0.9,
+            duration_seconds=12,
+            reason="Player 3 found something exciting.",
+        )
+
+        controller.connect()
+        scheduler.start()
+        scheduler.apply_ai_decision(decision)
+
+        self.assertEqual(scheduler.status().current_scene, SCENES["player_3"])
+        self.assertEqual(controller.get_current_scene(), SCENES["player_3"])
+
+    def test_focus_timer_returns_to_quad_without_terminal_input(self) -> None:
+        controller = DryRunOBSController(initial_scene=SCENES["quad"])
+        scheduler = SceneScheduler(
+            obs_controller=controller,
+            default_scene=SCENES["quad"],
+            confidence_threshold=0.75,
+            min_switch_interval_seconds=8,
+            max_focus_duration_seconds=20,
+        )
+
+        controller.connect()
+        scheduler.start()
+        scheduler.apply_ai_decision(
+            DirectorDecision(
+                target_scene=SCENES["player_2"],
+                confidence=0.9,
+                duration_seconds=12,
+                reason="Player 2 hit a clear moment.",
+            )
+        )
+        scheduler.focused_until = time.time() - 0.1
+        scheduler.last_switch_time = time.time() - 8.1
+
+        scheduler.tick()
+
         self.assertEqual(scheduler.status().current_scene, SCENES["quad"])
         self.assertEqual(controller.get_current_scene(), SCENES["quad"])
 

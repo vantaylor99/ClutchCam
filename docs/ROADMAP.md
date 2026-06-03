@@ -16,7 +16,9 @@ Deliverables:
 - Shared event contracts for production services.
 - Tests around contract behavior and configuration aliases.
 
-Status: mostly complete. A final MVP review ticket remains available.
+Status: complete for the terminal MVP baseline. Dry-run review has passed;
+live OBS scene-switching remains an operator validation step when OBS is
+available.
 
 ## Phase 1 - Local Media Ingestion And Lookback
 
@@ -144,9 +146,12 @@ Active implement tickets: none.
 
 Active plan tickets: none.
 
+Completed review tickets:
+
+- `tickets/complete/5-mvp-end-to-end-review.md`
+
 Backlog tickets:
 
-- `tickets/backlog/5-mvp-end-to-end-review.md`
 - `tickets/backlog/7-transcription-audio-extraction.md`
 - `tickets/backlog/8-transcription-event-api.md`
 - `tickets/backlog/9-transcript-trigger-prefilter.md`

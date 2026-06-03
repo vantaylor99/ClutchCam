@@ -18,13 +18,15 @@ It currently:
 - Applies confidence, cooldown, and focus-duration rules.
 - Switches OBS scenes immediately, with a dry-run mode for local smoke tests.
 - Defines lightweight production service boundaries under
-  `ai-stream-director/src/services/` for future ingestion, buffering,
-  transcription, AI classification, and switching adapters.
+  `ai-stream-director/src/services/` for ingestion, buffering, transcription,
+  AI classification, and switching adapters.
+- Includes first-pass local RTMP/SRT ingest and rolling lookback-buffer
+  implementations behind those service boundaries.
 
 It does not yet:
 
-- Ingest RTMP/SRT video feeds.
-- Maintain a rolling video buffer.
+- Wire RTMP/SRT video feeds into the runtime director loop.
+- Run the rolling video buffer as part of the app startup path.
 - Run real-time speech-to-text.
 - Cut to buffered media from before a trigger.
 - Run visual or multimodal hype detection.
@@ -44,9 +46,9 @@ The intended production system is local-first:
 5. OBS, PyVMIX, or a future compositor switches the master output to buffered
    media starting roughly 10-15 seconds before the trigger.
 
-The current `services/` modules are boundaries, not running daemons or adapters.
-Follow-up work such as `rolling-lookback-buffer` and
-`local-media-server-ingest` implements behavior behind those interfaces.
+The current `services/` modules are boundaries, not long-running daemons. First
+ingest and rolling-buffer implementations exist behind those interfaces;
+follow-up work wires them into the runtime director loop.
 
 See `docs/ARCHITECTURE.md` for service boundaries and shared contracts.
 

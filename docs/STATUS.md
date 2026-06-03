@@ -110,6 +110,11 @@ sockets:
 python -m unittest tests.test_ingestion_config -v
 ```
 
+Final terminal-MVP dry-run review passed for calm transcript input, a focused
+player moment, cooldown rejection, manual overrides, `/ai off`, `/ai on`,
+`/status`, `/quit`, and automatic return to `Quad View`. A live OBS WebSocket
+trial still requires OBS to be available with the five documented scenes.
+
 ## Known Repo Notes
 
 Tess is already installed in `tess/`. Ticket stage folders were originally

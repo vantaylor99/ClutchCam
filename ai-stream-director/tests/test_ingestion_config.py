@@ -99,6 +99,16 @@ class IngestionComposeConfigTests(unittest.TestCase):
         self.assertIn("SRS_RTMP_PORT=1935", env_example)
         self.assertIn("SRS_SRT_PORT=10080", env_example)
 
+    def test_ollama_pull_prefers_configured_gemma_model(self) -> None:
+        compose = (PROJECT_DIR / "docker-compose.yml").read_text()
+
+        self.assertIn("GEMMA_MODEL: ${GEMMA_MODEL:-}", compose)
+        self.assertIn("OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}", compose)
+        self.assertIn(
+            'ollama pull \\"$${GEMMA_MODEL:-$${OLLAMA_MODEL:-gemma3:4b}}\\"',
+            compose,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
