@@ -130,9 +130,7 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets:
-
-- `tickets/review/5-production-service-boundaries.md`
+Active review tickets: none.
 
 Active implement tickets:
 
