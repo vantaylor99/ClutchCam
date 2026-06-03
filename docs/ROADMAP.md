@@ -59,10 +59,14 @@ Deliverables:
 
 - Audio extraction per stream. First FFmpeg command/scaffolding implementation
   exists behind `services.transcription`; runtime wiring is still pending.
-- Faster-Whisper API adapter configured by `TRANSCRIPTION_API_URL`.
-- `TranscriptEvent` ingestion path.
-- Partial/final transcript handling.
-- Error handling for unavailable or slow transcription services.
+- Faster-Whisper API adapter configured by `TRANSCRIPTION_API_URL`. First HTTP
+  adapter implementation exists behind `services.transcription`; runtime wiring
+  is still pending.
+- `TranscriptEvent` ingestion path. `TranscriptRouter.add_event(...)` exists so
+  runtime code can feed normalized events without changing the terminal MVP
+  input path.
+- Partial/final transcript handling in normalized transcript events.
+- Error handling for unavailable, slow, or malformed transcription services.
 
 Success criteria:
 
@@ -149,12 +153,19 @@ Active plan tickets: none.
 
 Completed review tickets:
 
+- `tickets/complete/1-nonblocking-terminal-loop.md`
+- `tickets/complete/2-local-smoke-test-mode.md`
+- `tickets/complete/3-ollama-readiness-and-json-hardening.md`
+- `tickets/complete/4-obs-connection-and-scene-validation.md`
 - `tickets/complete/5-mvp-end-to-end-review.md`
+- `tickets/complete/5-production-service-boundaries.md`
+- `tickets/complete/6-rolling-lookback-buffer.md`
+- `tickets/complete/7-local-media-server-ingest.md`
 - `tickets/complete/7-transcription-audio-extraction.md`
+- `tickets/complete/8-transcription-event-api.md`
 
 Backlog tickets:
 
-- `tickets/backlog/8-transcription-event-api.md`
 - `tickets/backlog/9-transcript-trigger-prefilter.md`
 - `tickets/backlog/10-gemma-orchestration-adapter.md`
 - `tickets/backlog/11-openai-compatible-gemma-client.md`

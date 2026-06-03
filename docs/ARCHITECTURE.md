@@ -69,7 +69,8 @@ subprocesses, Faster-Whisper clients, media servers, AI clients, Docker
 containers, or network connections.
 
 Production defaults remain environment-driven through `config.py`, including
-`INGEST_API_URL`, `TRANSCRIPTION_API_URL`, `GEMMA_API_URL`, `GEMMA_MODEL`,
+`INGEST_API_URL`, `TRANSCRIPTION_API_URL`,
+`TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`, `GEMMA_API_URL`, `GEMMA_MODEL`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
@@ -119,8 +120,11 @@ emit `TranscriptEvent` objects rather than leaking provider-specific response
 shapes into the orchestrator.
 The current `services.transcription` module defines audio input references,
 transcriber/extractor protocols, fixture extraction, and an FFmpeg audio
-extractor that can build and manage per-stream audio chunk workers. It is not
-yet wired to Faster-Whisper.
+extractor that can build and manage per-stream audio chunk workers. It also
+includes a Faster-Whisper-compatible HTTP adapter that sends extracted audio
+URIs to `/transcribe`, normalizes common segment response shapes, shifts
+chunk-relative timestamps, and emits `TranscriptEvent` objects. The terminal
+MVP does not yet start the extractor or transcriber at runtime.
 
 ### AI Orchestration
 
@@ -176,6 +180,7 @@ cloud GPU inference should all be selected by environment variables:
 - `GEMMA_API_URL`
 - `GEMMA_MODEL`
 - `TRANSCRIPTION_API_URL`
+- `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
 - `INGEST_API_URL`
 
 `OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain accepted compatibility aliases for
@@ -185,7 +190,8 @@ the current MVP.
 
 1. Wire the implemented local media ingest and rolling FFmpeg lookback buffer
    into runtime workers.
-2. Add a transcription adapter that emits `TranscriptEvent` objects.
+2. Wire audio extraction and the Faster-Whisper adapter into a runtime
+   transcript event path.
 3. Generalize the AI director for OpenAI-compatible Gemma endpoints.
 4. Add buffered switch playback so OBS/PyVMIX cuts to
    `trigger_time - pre_roll`.

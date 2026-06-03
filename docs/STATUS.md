@@ -66,7 +66,7 @@ The `src/services/` package defines lightweight boundaries for:
   segment-based FFmpeg and fixture buffer implementations.
 - `services.transcription`: audio input references, extraction configuration,
   fixture audio extraction, FFmpeg audio extraction command/lifecycle helpers,
-  and transcript event emitters.
+  a Faster-Whisper-compatible HTTP adapter, and transcript event emitters.
 - `services.ai`: transcript or hybrid context to optional `HypeSignal` output.
 - `services.switcher`: immediate or buffered output switch requests.
 
@@ -80,7 +80,7 @@ The repo does not yet include:
 
 - A wired runtime path that starts FFmpeg lookback buffering as part of the app.
 - Runtime wiring that starts audio extraction workers with the app.
-- Faster-Whisper transcription adapter code.
+- Runtime wiring that sends extracted audio chunks to Faster-Whisper.
 - OpenAI-compatible Gemma/vLLM client support.
 - Buffered clip playback through OBS or PyVMIX.
 - End-to-end tests using sample media fixtures.
@@ -111,6 +111,13 @@ sockets:
 
 ```powershell
 python -m unittest tests.test_ingestion_config -v
+```
+
+The transcription adapter tests mock the Faster-Whisper HTTP surface and run
+without network access:
+
+```powershell
+python -m unittest tests.test_transcription_event_api -v
 ```
 
 Final terminal-MVP dry-run review passed for calm transcript input, a focused

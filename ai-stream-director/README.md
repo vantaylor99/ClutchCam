@@ -9,13 +9,14 @@ It does four things:
 3. Sends recent transcript context to a local Ollama model.
 4. Switches OBS scenes when the AI finds a clear focus moment.
 
-It does not do real transcription, video capture, stream delay, or OBS scene
-creation yet. A first rolling lookback buffer service exists behind
+It does not wire real transcription, video capture, stream delay, or OBS scene
+creation into the runtime loop yet. A first rolling lookback buffer service exists behind
 `src/services/buffer.py`, but it is not wired into the terminal MVP switching
 loop yet. A local SRS media-server service is available through Docker Compose
 for RTMP/SRT ingest, but the terminal MVP does not consume those feeds yet. A
 first FFmpeg audio extraction service exists behind `src/services/transcription.py`,
-but it is not wired to Faster-Whisper yet.
+along with a Faster-Whisper-compatible HTTP adapter, but neither is started by
+the terminal MVP yet.
 
 ## Production Direction
 
@@ -291,6 +292,25 @@ If a per-player audio input URL is not set, it falls back to
 `LOOKBACK_INPUT_URL_<PLAYER>` and then `<INGEST_API_URL>/<stream_id>`. The
 extractor is not started by the terminal MVP yet.
 
+## Transcription API Adapter
+
+`src/services/transcription.py` also includes `FasterWhisperTranscriber`, an
+HTTP adapter for Faster-Whisper-compatible services. It posts extracted audio
+chunk references to `<TRANSCRIPTION_API_URL>/transcribe`, accepts common
+segment response shapes, shifts chunk-relative timestamps by the audio
+reference start time, and emits normalized `TranscriptEvent` objects.
+
+Runtime settings:
+
+```text
+TRANSCRIPTION_API_URL=http://faster-whisper:8000
+TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
+```
+
+The adapter is unit-tested with mocked HTTP responses and does not require a
+live Faster-Whisper container for local validation. It is not wired into
+`src/main.py` yet.
+
 ## Running With Docker Compose
 
 Start the app stack, including the local media server:
@@ -398,6 +418,12 @@ Validate the rolling lookback buffer logic without FFmpeg or live inputs:
 python -m unittest tests.test_rolling_buffer -v
 ```
 
+Validate the transcription HTTP adapter without network access:
+
+```powershell
+python -m unittest tests.test_transcription_event_api -v
+```
+
 For local smoke testing without OBS, set `DRY_RUN_OBS=true` in `.env` or in your shell. The app should start even when OBS is closed, `/status` should show the current dry-run scene, and manual or AI-driven scene changes should print as `[DRY RUN OBS] Scene switch: ...`.
 
 Start with calm lines. The AI should usually keep `Quad View`.
@@ -469,8 +495,9 @@ python src/main.py
 The next implementation work is tracked in Tess tickets under `../tickets/` and
 summarized in `../docs/ROADMAP.md`.
 
-The most important near-term shift is replacing manual terminal transcript input
-with timestamped `TranscriptEvent` objects while keeping the scheduler and OBS
-controller mostly unchanged. Follow-up tickets wire the implemented media
-ingest and rolling lookback buffer behind `src/services/` before buffered
-switching uses `LookbackClipRequest` to cut to media from before a trigger.
+The most important near-term shift is wiring the implemented audio extraction
+and transcription adapter into runtime `TranscriptEvent` flow while keeping the
+scheduler and OBS controller mostly unchanged. Follow-up tickets wire the
+implemented media ingest and rolling lookback buffer behind `src/services/`
+before buffered switching uses `LookbackClipRequest` to cut to media from before
+a trigger.

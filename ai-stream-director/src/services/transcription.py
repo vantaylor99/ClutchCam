@@ -6,7 +6,7 @@ import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Callable, Protocol
 
 from config import AppConfig, STREAM_IDS
 from contracts import TranscriptEvent
@@ -100,6 +100,63 @@ class Transcriber(Protocol):
 
     def transcribe(self, audio: AudioInputRef) -> Iterable[TranscriptEvent]:
         """Yield transcript events for the supplied audio reference."""
+
+
+class FasterWhisperTranscriber:
+    """HTTP adapter for Faster-Whisper-compatible transcription APIs."""
+
+    def __init__(
+        self,
+        api_url: str,
+        timeout_seconds: float = 30,
+        endpoint_path: str = "/transcribe",
+        post: Callable[..., Any] | None = None,
+    ) -> None:
+        self.api_url = api_url.rstrip("/")
+        self.timeout_seconds = float(timeout_seconds)
+        self.endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+        self._post = post
+
+    @classmethod
+    def from_app_config(cls, app_config: AppConfig) -> "FasterWhisperTranscriber":
+        return cls(
+            api_url=app_config.transcription_api_url,
+            timeout_seconds=app_config.transcription_request_timeout_seconds,
+        )
+
+    def transcribe(self, audio: AudioInputRef) -> tuple[TranscriptEvent, ...]:
+        payload = self._request_payload(audio)
+        return tuple(_events_from_payload(payload, audio))
+
+    def _request_payload(self, audio: AudioInputRef) -> Any:
+        request_payload = {
+            "stream_id": audio.stream_id,
+            "audio_uri": audio.uri,
+            "starts_at_seconds": audio.starts_at_seconds,
+            "duration_seconds": audio.duration_seconds,
+            "codec": audio.codec,
+            "sample_rate_hz": audio.sample_rate_hz,
+            "channels": audio.channels,
+        }
+
+        try:
+            response = self._post_json(
+                f"{self.api_url}{self.endpoint_path}",
+                json=request_payload,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            raise TranscriptionError(f"Transcription request failed: {exc}") from exc
+
+    def _post_json(self, url: str, **kwargs: Any) -> Any:
+        if self._post is not None:
+            return self._post(url, **kwargs)
+
+        import requests
+
+        return requests.post(url, **kwargs)
 
 
 class AudioExtractor(Protocol):
@@ -290,6 +347,77 @@ def _audio_ref_from_config(
 def _ensure_known_stream(config: AudioExtractionConfig, stream_id: str) -> None:
     if stream_id not in config.stream_ids:
         raise TranscriptionError(f"Unknown stream ID: {stream_id}")
+
+
+def _events_from_payload(payload: Any, audio: AudioInputRef) -> tuple[TranscriptEvent, ...]:
+    segments = _segments_from_payload(payload)
+    events: list[TranscriptEvent] = []
+    offset = audio.starts_at_seconds or 0.0
+
+    for segment in segments:
+        events.append(_event_from_segment(segment, audio.stream_id, offset))
+
+    return tuple(events)
+
+
+def _segments_from_payload(payload: Any) -> tuple[dict[str, Any], ...]:
+    if isinstance(payload, dict):
+        segments = payload.get("segments")
+        if segments is None and "text" in payload:
+            segments = [payload]
+    elif isinstance(payload, list):
+        segments = payload
+    else:
+        raise TranscriptionError("Transcription response must be an object or list.")
+
+    if not isinstance(segments, list):
+        raise TranscriptionError("Transcription response segments must be a list.")
+
+    normalized: list[dict[str, Any]] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            raise TranscriptionError("Transcription segment must be an object.")
+        normalized.append(segment)
+
+    return tuple(normalized)
+
+
+def _event_from_segment(
+    segment: dict[str, Any],
+    stream_id: str,
+    offset_seconds: float,
+) -> TranscriptEvent:
+    text = str(segment.get("text", "")).strip()
+    if not text:
+        raise TranscriptionError("Transcription segment text is missing.")
+
+    start = _segment_time(segment, "start", "start_seconds")
+    end = _segment_time(segment, "end", "end_seconds")
+    if end <= start:
+        raise TranscriptionError("Transcription segment end must be after start.")
+
+    is_final = segment.get("is_final", segment.get("final", True))
+    return TranscriptEvent(
+        stream_id=stream_id,
+        text=text,
+        start_time_seconds=offset_seconds + start,
+        end_time_seconds=offset_seconds + end,
+        is_final=bool(is_final),
+    )
+
+
+def _segment_time(segment: dict[str, Any], *names: str) -> float:
+    for name in names:
+        if name not in segment:
+            continue
+        try:
+            return float(segment[name])
+        except (TypeError, ValueError) as exc:
+            raise TranscriptionError(
+                f"Transcription segment {name} must be numeric."
+            ) from exc
+
+    raise TranscriptionError(f"Transcription segment is missing {names[0]}.")
 
 
 def _format_seconds(value: float) -> str:

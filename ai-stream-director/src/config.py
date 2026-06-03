@@ -23,6 +23,7 @@ class AppConfig:
     dry_run_obs: bool
     ingest_api_url: str
     transcription_api_url: str
+    transcription_request_timeout_seconds: float
     gemma_api_url: str
     gemma_model: str
     lookback_buffer_dir: str
@@ -64,6 +65,9 @@ def get_config() -> AppConfig:
         transcription_api_url=os.getenv(
             "TRANSCRIPTION_API_URL",
             "http://faster-whisper:8000",
+        ),
+        transcription_request_timeout_seconds=float(
+            os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS", "30")
         ),
         gemma_api_url=_compat_env(
             primary_name="GEMMA_API_URL",

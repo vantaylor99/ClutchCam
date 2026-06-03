@@ -13,6 +13,7 @@ class TranscriptMessage:
     speaker: str
     text: str
     timestamp: float
+    received_at: Optional[float] = None
 
     def to_event(self) -> TranscriptEvent:
         return TranscriptEvent(
@@ -50,6 +51,27 @@ class TranscriptRouter:
         self._trim_history()
         return message
 
+    def add_event(self, event: TranscriptEvent) -> Optional[TranscriptMessage]:
+        speaker = event.stream_id.strip().lower()
+        text = event.text.strip()
+
+        if (
+            speaker not in VALID_SPEAKERS
+            or not text
+            or event.end_time_seconds < event.start_time_seconds
+        ):
+            return None
+
+        message = TranscriptMessage(
+            speaker=speaker,
+            text=text,
+            timestamp=event.end_time_seconds,
+            received_at=time.time(),
+        )
+        self._messages.append(message)
+        self._trim_history()
+        return message
+
     def get_recent_messages(self) -> List[TranscriptMessage]:
         self._trim_history()
         return list(self._messages)
@@ -67,7 +89,9 @@ class TranscriptRouter:
     def _trim_history(self) -> None:
         cutoff = time.time() - self.history_seconds
         self._messages = [
-            message for message in self._messages if message.timestamp >= cutoff
+            message
+            for message in self._messages
+            if (message.received_at or message.timestamp) >= cutoff
         ]
 
         if len(self._messages) > self.max_messages:
