@@ -47,7 +47,6 @@ def build_configured_sources(
 ) -> tuple[StreamSource, ...]:
     """Build configured source records from environment-derived settings."""
 
-    base_url = ingest_base_url.rstrip("/")
     sources: list[StreamSource] = []
     for stream_id in stream_ids:
         scene_name = scenes.get(stream_id)
@@ -58,7 +57,7 @@ def build_configured_sources(
             StreamSource(
                 stream_id=stream_id,
                 display_name=_display_name(stream_id),
-                ingest_url=f"{base_url}/{stream_id}",
+                ingest_url=build_rtmp_stream_url(ingest_base_url, stream_id),
                 scene_name=scene_name,
             )
         )
@@ -66,5 +65,53 @@ def build_configured_sources(
     return tuple(sources)
 
 
+def build_rtmp_stream_url(base_url: str, stream_id: str) -> str:
+    """Build an RTMP URL under the configured ingest app."""
+
+    return f"{base_url.rstrip('/')}/{stream_id}"
+
+
+def build_srt_publish_url(
+    host: str,
+    port: int | str,
+    stream_id: str,
+    app: str = "live",
+) -> str:
+    """Build an SRT publish URL using SRS streamid mode syntax."""
+
+    return _build_srt_stream_url(host, port, app, stream_id, mode="publish")
+
+
+def build_srt_request_url(
+    host: str,
+    port: int | str,
+    stream_id: str,
+    app: str = "live",
+) -> str:
+    """Build an SRT request/play URL using SRS streamid mode syntax."""
+
+    return _build_srt_stream_url(host, port, app, stream_id, mode="request")
+
+
 def _display_name(stream_id: str) -> str:
     return stream_id.replace("_", " ").title()
+
+
+def _build_srt_stream_url(
+    host: str,
+    port: int | str,
+    app: str,
+    stream_id: str,
+    mode: str,
+) -> str:
+    if mode not in {"publish", "request"}:
+        raise StreamSourceError(f"Unsupported SRT stream mode {mode}.")
+
+    streamid = f"#!::r={app}/{stream_id},m={mode}"
+    return f"srt://{_format_srt_host(host)}:{port}?streamid={streamid}"
+
+
+def _format_srt_host(host: str) -> str:
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        return f"[{host}]"
+    return host

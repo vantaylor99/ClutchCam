@@ -1,4 +1,16 @@
 services:
+  media-server:
+    image: ${SRS_IMAGE:-ossrs/srs:6}
+    container_name: ai-stream-director-media-server
+    command: ["./objs/srs", "-c", "conf/clutchcam.conf"]
+    ports:
+      - "${SRS_BIND_ADDR:-127.0.0.1}:${SRS_RTMP_PORT:-1935}:1935/tcp"
+      - "${SRS_BIND_ADDR:-127.0.0.1}:${SRS_HTTP_API_PORT:-1985}:1985/tcp"
+      - "${SRS_BIND_ADDR:-127.0.0.1}:${SRS_HTTP_STREAM_PORT:-8080}:8080/tcp"
+      - "${SRS_BIND_ADDR:-127.0.0.1}:${SRS_SRT_PORT:-10080}:10080/udp"
+    volumes:
+      - ./infra/srs.conf:/usr/local/srs/conf/clutchcam.conf:ro
+
   ollama:
     image: ollama/ollama:latest
     container_name: ai-stream-director-ollama
@@ -27,6 +39,8 @@ services:
     build: .
     container_name: ai-stream-director-app
     depends_on:
+      media-server:
+        condition: service_started
       ollama:
         condition: service_healthy
       ollama-pull:
@@ -34,6 +48,7 @@ services:
     env_file:
       - .env
     environment:
+      INGEST_API_URL: ${INGEST_API_URL:-rtmp://media-server:1935/live}
       OLLAMA_BASE_URL: http://ollama:11434
     stdin_open: true
     tty: true

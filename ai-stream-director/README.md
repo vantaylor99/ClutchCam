@@ -12,7 +12,8 @@ It does four things:
 It does not do real transcription, video capture, stream delay, or OBS scene
 creation yet. A first rolling lookback buffer service exists behind
 `src/services/buffer.py`, but it is not wired into the terminal MVP switching
-loop yet.
+loop yet. A local SRS media-server service is available through Docker Compose
+for RTMP/SRT ingest, but the terminal MVP does not consume those feeds yet.
 
 ## Production Direction
 
@@ -52,6 +53,8 @@ ai-stream-director/
     scheduler.py
   docker-compose.yml
   Dockerfile
+  infra/
+    srs.conf
   requirements.txt
   README.md
   .env.example
@@ -120,6 +123,115 @@ OLLAMA_BASE_URL=http://ollama:11434
 
 `GEMMA_*` names are preferred for the production architecture. `OLLAMA_*` names remain compatibility aliases for the current MVP. You can replace the model with another small local Gemma-compatible model if needed.
 
+## Local Media Server
+
+Docker Compose includes a local SRS service named `media-server` for RTMP and
+SRT ingest. It uses `infra/srs.conf`, listens inside the Compose network on
+RTMP `1935/tcp`, HTTP API `1985/tcp`, HTTP stream output `8080/tcp`, and SRT
+`10080/udp`, and publishes stable streams under the `live` app.
+
+Start only the media server:
+
+```powershell
+docker compose up -d media-server
+```
+
+The default host bindings are local-only:
+
+```text
+SRS_BIND_ADDR=127.0.0.1
+SRS_RTMP_PORT=1935
+SRS_HTTP_API_PORT=1985
+SRS_HTTP_STREAM_PORT=8080
+SRS_SRT_PORT=10080
+```
+
+Set `SRS_BIND_ADDR=0.0.0.0` only when the machine's LAN firewall boundary is
+intentional. Player capture machines cannot reach a host-local
+`127.0.0.1` binding from another computer.
+
+For OBS or vMix RTMP publishing, use this server/app shape and a per-player
+stream key:
+
+```text
+Server: rtmp://<media-server-host>:<SRS_RTMP_PORT>/live
+Stream key: player_1
+```
+
+Equivalent full RTMP publish URLs are:
+
+```text
+rtmp://<media-server-host>:<SRS_RTMP_PORT>/live/player_1
+rtmp://<media-server-host>:<SRS_RTMP_PORT>/live/player_2
+rtmp://<media-server-host>:<SRS_RTMP_PORT>/live/player_3
+rtmp://<media-server-host>:<SRS_RTMP_PORT>/live/player_4
+```
+
+SRT publishers should use explicit publish-mode stream IDs:
+
+```text
+srt://<media-server-host>:<SRS_SRT_PORT>?streamid=#!::r=live/player_1,m=publish
+srt://<media-server-host>:<SRS_SRT_PORT>?streamid=#!::r=live/player_2,m=publish
+srt://<media-server-host>:<SRS_SRT_PORT>?streamid=#!::r=live/player_3,m=publish
+srt://<media-server-host>:<SRS_SRT_PORT>?streamid=#!::r=live/player_4,m=publish
+```
+
+Inside Docker Compose, workers should consume service-DNS URLs rather than host
+ports:
+
+```text
+INGEST_API_URL=rtmp://media-server:1935/live
+rtmp://media-server:1935/live/player_1
+rtmp://media-server:1935/live/player_2
+rtmp://media-server:1935/live/player_3
+rtmp://media-server:1935/live/player_4
+```
+
+If a worker needs SRT request/play URLs, use explicit request mode:
+
+```text
+srt://media-server:10080?streamid=#!::r=live/player_1,m=request
+```
+
+Repeat that pattern for `player_2`, `player_3`, and `player_4`.
+
+The upstream `ossrs/srs:6` image does not guarantee `curl` or `wget` for an
+in-container health check, so Compose keeps the endpoint available and uses
+manual host validation:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:1985/api/v1/summaries
+```
+
+### Generated-Source Smoke Tests
+
+Publish a generated RTMP source for `player_1`:
+
+```powershell
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 -f lavfi -i sine=frequency=440 -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -c:a aac -f flv rtmp://127.0.0.1:1935/live/player_1
+```
+
+Publish a generated SRT source for `player_1`:
+
+```powershell
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 -f lavfi -i sine=frequency=440 -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -c:a aac -pes_payload_size 0 -f mpegts "srt://127.0.0.1:10080?streamid=#!::r=live/player_1,m=publish"
+```
+
+Validate the stream with local tools:
+
+```powershell
+ffprobe -hide_banner rtmp://127.0.0.1:1935/live/player_1
+ffplay rtmp://127.0.0.1:1935/live/player_1
+ffplay "srt://127.0.0.1:10080?streamid=#!::r=live/player_1,m=request"
+ffplay http://127.0.0.1:8080/live/player_1.flv
+Invoke-RestMethod http://127.0.0.1:1985/api/v1/summaries
+```
+
+To run four distinguishable test feeds, repeat the publish command for
+`player_2`, `player_3`, and `player_4`. Use different audio frequencies such as
+`550`, `660`, and `770`, and change the test pattern if useful, for example
+`testsrc2` or `smptebars`.
+
 ## Rolling Lookback Buffer
 
 `src/services/buffer.py` includes a segment-based lookback buffer implementation
@@ -141,10 +253,11 @@ LOOKBACK_WINDOW_SECONDS=30
 SWITCH_LOOKBACK_SECONDS=15
 LOOKBACK_SEGMENT_SECONDS=2
 FFMPEG_EXECUTABLE=ffmpeg
-LOOKBACK_INPUT_URL_PLAYER_1=rtmp://localhost/live/player_1
-LOOKBACK_INPUT_URL_PLAYER_2=rtmp://localhost/live/player_2
-LOOKBACK_INPUT_URL_PLAYER_3=rtmp://localhost/live/player_3
-LOOKBACK_INPUT_URL_PLAYER_4=rtmp://localhost/live/player_4
+INGEST_API_URL=rtmp://media-server:1935/live
+LOOKBACK_INPUT_URL_PLAYER_1=rtmp://media-server:1935/live/player_1
+LOOKBACK_INPUT_URL_PLAYER_2=rtmp://media-server:1935/live/player_2
+LOOKBACK_INPUT_URL_PLAYER_3=rtmp://media-server:1935/live/player_3
+LOOKBACK_INPUT_URL_PLAYER_4=rtmp://media-server:1935/live/player_4
 ```
 
 If a per-player input URL is not set, it defaults to
@@ -154,18 +267,20 @@ continuously writing short media segments to SSD.
 
 ## Running With Docker Compose
 
-Start the app:
+Start the app stack, including the local media server:
 
 ```powershell
 docker compose up --build app
 ```
 
-On first run, Docker Compose will start Ollama and pull the configured model. That can take a while.
+On first run, Docker Compose will start SRS, start Ollama, and pull the
+configured model. The model pull can take a while.
 
 If terminal input feels awkward through `docker compose up`, run the app as an interactive one-off container:
 
 ```powershell
 docker compose up -d ollama
+docker compose up -d media-server
 docker compose run --rm ollama-pull
 docker compose run --rm app
 ```
@@ -330,6 +445,6 @@ summarized in `../docs/ROADMAP.md`.
 
 The most important near-term shift is replacing manual terminal transcript input
 with timestamped `TranscriptEvent` objects while keeping the scheduler and OBS
-controller mostly unchanged. Follow-up tickets implement the rolling lookback
-buffer and local media-server ingest behind `src/services/` before buffered
+controller mostly unchanged. Follow-up tickets wire the implemented media
+ingest and rolling lookback buffer behind `src/services/` before buffered
 switching uses `LookbackClipRequest` to cut to media from before a trigger.

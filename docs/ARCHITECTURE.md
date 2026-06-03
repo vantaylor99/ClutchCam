@@ -22,7 +22,7 @@ switching.
 RTMP/SRT feeds
     |
     v
-Local media server
+SRS local media server (Docker Compose)
     |
     +--> Rolling lookback buffer in /dev/shm
     |
@@ -74,16 +74,28 @@ Production defaults remain environment-driven through `config.py`, including
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
+For the Compose stack, `INGEST_API_URL` points workers at
+`rtmp://media-server:1935/live` so stream records resolve through Docker service
+DNS instead of host-published ports.
 
 ## Service Responsibilities
 
 ### Ingestion
 
-The ingestion layer should run on local hardware and accept RTMP or SRT streams
-from the participating players or capture machines. It should provide stable
-stream IDs such as `player_1`, `player_2`, `player_3`, and `player_4`.
-The current `services.ingestion` module describes those `StreamSource` records
-and source-provider interface only; it does not start a media server.
+The ingestion layer runs on local hardware and accepts RTMP or SRT streams from
+the participating players or capture machines. The first concrete local ingest
+implementation uses SRS through Docker Compose. The `media-server` service
+mounts `ai-stream-director/infra/srs.conf`, exposes RTMP, SRT, the SRS HTTP
+API, and HTTP-FLV/HLS inspection endpoints, and keeps raw player feeds on the
+local network by default.
+
+Stable stream IDs are published under the SRS `live` app:
+`player_1`, `player_2`, `player_3`, and `player_4`. Worker-facing RTMP URLs use
+`rtmp://media-server:1935/live/<stream_id>` inside Compose. Publisher-facing
+SRT URLs use explicit stream IDs such as
+`srt://<media-server-host>:10080?streamid=#!::r=live/player_1,m=publish`.
+The current `services.ingestion` module describes deterministic `StreamSource`
+records and URL helpers only; it does not start SRS or inspect Docker.
 
 ### Rolling Buffer
 
@@ -169,11 +181,12 @@ the current MVP.
 
 ## Near-Term Sequence
 
-1. Wire the implemented rolling FFmpeg lookback buffer into buffered switching.
-2. Add local media-server ingest behind `services.ingestion`.
-3. Add a transcription adapter that emits `TranscriptEvent` objects.
-4. Generalize the AI director for OpenAI-compatible Gemma endpoints.
-5. Add buffered switch playback so OBS/PyVMIX cuts to `trigger_time - pre_roll`.
+1. Wire the implemented local media ingest and rolling FFmpeg lookback buffer
+   into runtime workers.
+2. Add a transcription adapter that emits `TranscriptEvent` objects.
+3. Generalize the AI director for OpenAI-compatible Gemma endpoints.
+4. Add buffered switch playback so OBS/PyVMIX cuts to
+   `trigger_time - pre_roll`.
 
 See `docs/ROADMAP.md` for the staged implementation plan and `tickets/` for
 the executable Tess backlog.

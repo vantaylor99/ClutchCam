@@ -22,6 +22,10 @@ The MVP supports:
 - A first rolling lookback buffer implementation in `src/services/buffer.py`
   with FFmpeg command construction, segment metadata rehydration, retention
   pruning, fixture-mode tests, and local playlist clip resolution.
+- A first local RTMP/SRT ingest configuration using SRS through Docker Compose.
+  The `media-server` service mounts `ai-stream-director/infra/srs.conf`,
+  exposes RTMP, SRT, the SRS HTTP API, and HTTP stream output, and publishes
+  stable streams under `live/player_1` through `live/player_4`.
 
 ## What Is Partially Started
 
@@ -34,9 +38,15 @@ Production-oriented configuration has been introduced:
 - `LOOKBACK_BUFFER_DIR`
 - `LOOKBACK_WINDOW_SECONDS`
 - `SWITCH_LOOKBACK_SECONDS`
+- SRS Docker settings: `SRS_IMAGE`, `SRS_BIND_ADDR`, `SRS_RTMP_PORT`,
+  `SRS_HTTP_API_PORT`, `SRS_HTTP_STREAM_PORT`, and `SRS_SRT_PORT`
 
 `OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain compatibility aliases while the MVP
 still talks to Ollama's native API shape.
+
+For the Docker Compose stack, `INGEST_API_URL` defaults to
+`rtmp://media-server:1935/live` so future FFmpeg buffer workers can build
+worker-facing URLs without host port assumptions.
 
 The shared contracts currently define:
 
@@ -50,7 +60,8 @@ These contracts are not yet wired into full production services.
 
 The `src/services/` package defines lightweight boundaries for:
 
-- `services.ingestion`: configured `StreamSource` records and source providers.
+- `services.ingestion`: configured `StreamSource` records, source providers, and
+  pure RTMP/SRT URL helpers.
 - `services.buffer`: `LookbackClipRequest` resolution states plus the first
   segment-based FFmpeg and fixture buffer implementations.
 - `services.transcription`: audio input references and transcript event emitters.
@@ -65,7 +76,6 @@ buffer adapter starts FFmpeg only after explicit construction and `start()`.
 
 The repo does not yet include:
 
-- A local RTMP/SRT media server configuration.
 - A wired runtime path that starts FFmpeg lookback buffering as part of the app.
 - Faster-Whisper audio extraction or transcription adapter code.
 - OpenAI-compatible Gemma/vLLM client support.
@@ -91,6 +101,13 @@ The rolling-buffer fixture tests run without live media input or FFmpeg:
 
 ```powershell
 python -m unittest tests.test_rolling_buffer -v
+```
+
+The local ingest configuration tests run without Docker, FFmpeg, or network
+sockets:
+
+```powershell
+python -m unittest tests.test_ingestion_config -v
 ```
 
 ## Known Repo Notes

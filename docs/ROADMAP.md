@@ -28,7 +28,8 @@ Deliverables:
 - Service layout for ingestion, buffer, transcription, orchestration, and
   switcher boundaries. Boundary scaffolding exists under
   `ai-stream-director/src/services/`; behavior lands in follow-up tickets.
-- Local RTMP/SRT media server configuration.
+- Local RTMP/SRT media server configuration. First implementation exists as an
+  SRS `media-server` Docker Compose service using `ai-stream-director/infra/srs.conf`.
 - FFmpeg-based rolling segment writer using `/dev/shm`. First implementation
   exists behind `services.buffer` and awaits review.
 - Clip resolver that turns `LookbackClipRequest` into concrete media ranges.
@@ -39,6 +40,8 @@ Deliverables:
 Success criteria:
 
 - Four streams can be represented by stable stream IDs.
+- RTMP/SRT publishers can target SRS `live/player_1` through `live/player_4`,
+  and Compose workers can consume `rtmp://media-server:1935/live/<stream_id>`.
 - Each stream retains at least `LOOKBACK_WINDOW_SECONDS` of media.
 - A trigger at time `T` can resolve media beginning at
   `T - SWITCH_LOOKBACK_SECONDS`.
@@ -136,10 +139,9 @@ Success criteria:
 Active review tickets:
 
 - `tickets/review/6-rolling-lookback-buffer.md`
+- `tickets/review/7-local-media-server-ingest.md`
 
-Active implement tickets:
-
-- `tickets/implement/7-local-media-server-ingest.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
