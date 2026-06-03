@@ -1,5 +1,6 @@
 node_modules/
 __pycache__/
 *.pyc
+ai-stream-director/tmp*/
 .test-tmp/
 ai-stream-director/tmp*/
