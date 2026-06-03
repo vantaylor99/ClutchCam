@@ -17,6 +17,9 @@ It currently:
 - Sends recent transcript context to a local Ollama/Gemma-compatible model.
 - Applies confidence, cooldown, and focus-duration rules.
 - Switches OBS scenes immediately, with a dry-run mode for local smoke tests.
+- Defines lightweight production service boundaries under
+  `ai-stream-director/src/services/` for future ingestion, buffering,
+  transcription, AI classification, and switching adapters.
 
 It does not yet:
 
@@ -40,6 +43,10 @@ The intended production system is local-first:
 4. Local Python rules and Gemma classify transcript and visual hype signals.
 5. OBS, PyVMIX, or a future compositor switches the master output to buffered
    media starting roughly 10-15 seconds before the trigger.
+
+The current `services/` modules are boundaries, not running daemons or adapters.
+Follow-up work such as `rolling-lookback-buffer` and
+`local-media-server-ingest` implements behavior behind those interfaces.
 
 See `docs/ARCHITECTURE.md` for service boundaries and shared contracts.
 

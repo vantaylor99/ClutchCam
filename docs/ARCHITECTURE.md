@@ -45,6 +45,34 @@ The current `ai-stream-director` app is the orchestrator MVP. It already owns
 the transcript-to-decision loop and OBS switching boundary. The next services
 should plug into that boundary instead of rewriting it.
 
+## Boundary Package
+
+The importable production boundary scaffolding lives under
+`ai-stream-director/src/`:
+
+```text
+contracts.py
+config.py
+services/
+  __init__.py
+  ingestion.py
+  buffer.py
+  transcription.py
+  ai.py
+  switcher.py
+```
+
+These modules are not running services yet. They define standard-library
+protocols, dataclasses, and exceptions that future adapters can implement
+without leaking provider details into the orchestrator. Importing them must not
+instantiate OBS clients, FFmpeg subprocesses, Faster-Whisper clients, media
+servers, AI clients, Docker containers, or network connections.
+
+Production defaults remain environment-driven through `config.py`, including
+`INGEST_API_URL`, `TRANSCRIPTION_API_URL`, `GEMMA_API_URL`, `GEMMA_MODEL`,
+`LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
+`SWITCH_LOOKBACK_SECONDS`.
+
 ## Service Responsibilities
 
 ### Ingestion
@@ -52,6 +80,8 @@ should plug into that boundary instead of rewriting it.
 The ingestion layer should run on local hardware and accept RTMP or SRT streams
 from the participating players or capture machines. It should provide stable
 stream IDs such as `player_1`, `player_2`, `player_3`, and `player_4`.
+The current `services.ingestion` module describes those `StreamSource` records
+and source-provider interface only; it does not start a media server.
 
 ### Rolling Buffer
 
@@ -59,6 +89,8 @@ The buffer layer should keep recent media in a RAM-backed path such as
 `/dev/shm/clutchcam`. The first implementation should use FFmpeg segmenting and
 simple filesystem inspection before introducing more advanced media graph
 management.
+The current `services.buffer` module accepts `LookbackClipRequest` and returns a
+ready, pending, or unavailable clip-resolution result without launching FFmpeg.
 
 ### Transcription
 
@@ -66,18 +98,25 @@ The transcription layer should isolate audio per stream and call a
 Faster-Whisper-compatible API configured by `TRANSCRIPTION_API_URL`. It should
 emit `TranscriptEvent` objects rather than leaking provider-specific response
 shapes into the orchestrator.
+The current `services.transcription` module defines audio input references and a
+transcriber protocol only.
 
 ### AI Orchestration
 
 The AI layer should use cheap local transcript rules first, then call Gemma for
 context-heavy or ambiguous moments. The implementation must not assume where
 Gemma runs. `GEMMA_API_URL` and `GEMMA_MODEL` are the primary contract.
+The current `services.ai` module accepts transcript or hybrid context and
+returns optional `HypeSignal` values without assuming Ollama, Docker, local host
+processes, or remote GPU inference.
 
 ### Switching
 
 The switcher layer should support immediate OBS scene changes during the MVP and
 buffered playback for production. A positive trigger should map to a
 `LookbackClipRequest`, resolve playable media, and then switch the master output.
+The current `services.switcher` module keeps immediate scene changes and future
+buffered playback behind one output-switching protocol.
 
 ## Core Contracts
 
@@ -123,10 +162,11 @@ the current MVP.
 
 ## Near-Term Sequence
 
-1. Build the rolling FFmpeg lookback buffer around `/dev/shm`.
-2. Add a transcription adapter that emits `TranscriptEvent` objects.
-3. Generalize the AI director for OpenAI-compatible Gemma endpoints.
-4. Add buffered switch playback so OBS/PyVMIX cuts to `trigger_time - pre_roll`.
+1. Implement the rolling FFmpeg lookback buffer behind `services.buffer`.
+2. Add local media-server ingest behind `services.ingestion`.
+3. Add a transcription adapter that emits `TranscriptEvent` objects.
+4. Generalize the AI director for OpenAI-compatible Gemma endpoints.
+5. Add buffered switch playback so OBS/PyVMIX cuts to `trigger_time - pre_roll`.
 
 See `docs/ROADMAP.md` for the staged implementation plan and `tickets/` for
 the executable Tess backlog.

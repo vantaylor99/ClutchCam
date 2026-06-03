@@ -23,18 +23,31 @@ The MVP is being shaped into the ClutchCam live media orchestration stack:
 
 The production architecture notes live in `../docs/ARCHITECTURE.md`. Shared event contracts for transcripts, hype signals, buffered clip requests, and switcher targets live in `src/contracts.py`.
 
+The `src/services/` package defines the production boundaries for ingestion,
+buffering, transcription, AI classification, and switching. These modules are
+scaffolding only: they are importable protocols/dataclasses and do not start
+media servers, FFmpeg, Faster-Whisper, AI clients, Docker, network calls, or OBS
+connections.
+
 ## Project Structure
 
 ```text
 ai-stream-director/
   src/
     contracts.py
+    config.py
+    services/
+      __init__.py
+      ingestion.py
+      buffer.py
+      transcription.py
+      ai.py
+      switcher.py
     main.py
     obs_controller.py
     ai_director.py
     transcript_router.py
     scheduler.py
-    config.py
   docker-compose.yml
   Dockerfile
   requirements.txt
@@ -277,6 +290,6 @@ summarized in `../docs/ROADMAP.md`.
 
 The most important near-term shift is replacing manual terminal transcript input
 with timestamped `TranscriptEvent` objects while keeping the scheduler and OBS
-controller mostly unchanged. After that, buffered switching can use
-`LookbackClipRequest` to cut to media from before a trigger instead of switching
-only to the live moment.
+controller mostly unchanged. Follow-up tickets implement the rolling lookback
+buffer and local media-server ingest behind `src/services/` before buffered
+switching uses `LookbackClipRequest` to cut to media from before a trigger.

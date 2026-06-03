@@ -18,6 +18,7 @@ The MVP supports:
 - Non-blocking terminal input so scheduler timers keep advancing.
 - Ollama readiness checks and hardened JSON parsing for local model output.
 - Shared production-facing event contracts in `src/contracts.py`.
+- Importable production service boundary scaffolding in `src/services/`.
 
 ## What Is Partially Started
 
@@ -44,6 +45,17 @@ The shared contracts currently define:
 
 These contracts are not yet wired into full production services.
 
+The `src/services/` package defines lightweight boundaries for:
+
+- `services.ingestion`: configured `StreamSource` records and source providers.
+- `services.buffer`: `LookbackClipRequest` resolution states.
+- `services.transcription`: audio input references and transcript event emitters.
+- `services.ai`: transcript or hybrid context to optional `HypeSignal` output.
+- `services.switcher`: immediate or buffered output switch requests.
+
+These modules intentionally do not instantiate OBS, FFmpeg, media-server,
+transcription, AI, Docker, or network clients.
+
 ## What Does Not Exist Yet
 
 The repo does not yet include:
@@ -66,8 +78,10 @@ contract/config scaffolding. Run it from `ai-stream-director/`:
 python -m unittest discover -s tests -v
 ```
 
-The latest local validation run used the bundled Codex Python runtime and passed
-22 tests.
+The service-boundary tests include a clean-process import check to prove
+`services.*` modules do not pull in runtime client dependencies. Full-suite
+validation requires the dependencies in `requirements.txt`, including
+`requests` and `obsws-python`.
 
 ## Known Repo Notes
 

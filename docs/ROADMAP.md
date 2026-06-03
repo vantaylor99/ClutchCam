@@ -26,7 +26,8 @@ without writing continuously to SSD.
 Deliverables:
 
 - Service layout for ingestion, buffer, transcription, orchestration, and
-  switcher boundaries.
+  switcher boundaries. Boundary scaffolding exists under
+  `ai-stream-director/src/services/`; behavior lands in follow-up tickets.
 - Local RTMP/SRT media server configuration.
 - FFmpeg-based rolling segment writer using `/dev/shm`.
 - Clip resolver that turns `LookbackClipRequest` into concrete media ranges.
@@ -129,9 +130,12 @@ Success criteria:
 
 ## Tess Ticket Map
 
+Active review tickets:
+
+- `tickets/review/5-production-service-boundaries.md`
+
 Active plan tickets:
 
-- `tickets/plan/5-production-service-boundaries.md`
 - `tickets/plan/6-rolling-lookback-buffer.md`
 - `tickets/plan/7-local-media-server-ingest.md`
 
