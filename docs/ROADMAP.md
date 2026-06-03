@@ -57,7 +57,8 @@ the existing decision/scheduler boundary.
 
 Deliverables:
 
-- Audio extraction per stream.
+- Audio extraction per stream. First FFmpeg command/scaffolding implementation
+  exists behind `services.transcription`; runtime wiring is still pending.
 - Faster-Whisper API adapter configured by `TRANSCRIPTION_API_URL`.
 - `TranscriptEvent` ingestion path.
 - Partial/final transcript handling.
@@ -140,7 +141,9 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets: none.
+Active review tickets:
+
+- `tickets/review/7-transcription-audio-extraction.md`
 
 Active implement tickets: none.
 
@@ -152,7 +155,6 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/7-transcription-audio-extraction.md`
 - `tickets/backlog/8-transcription-event-api.md`
 - `tickets/backlog/9-transcript-trigger-prefilter.md`
 - `tickets/backlog/10-gemma-orchestration-adapter.md`

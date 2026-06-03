@@ -13,7 +13,9 @@ It does not do real transcription, video capture, stream delay, or OBS scene
 creation yet. A first rolling lookback buffer service exists behind
 `src/services/buffer.py`, but it is not wired into the terminal MVP switching
 loop yet. A local SRS media-server service is available through Docker Compose
-for RTMP/SRT ingest, but the terminal MVP does not consume those feeds yet.
+for RTMP/SRT ingest, but the terminal MVP does not consume those feeds yet. A
+first FFmpeg audio extraction service exists behind `src/services/transcription.py`,
+but it is not wired to Faster-Whisper yet.
 
 ## Production Direction
 
@@ -264,6 +266,30 @@ If a per-player input URL is not set, it defaults to
 `<INGEST_API_URL>/<stream_id>`. On Linux, keep `LOOKBACK_BUFFER_DIR` on
 `/dev/shm/clutchcam` so the rolling buffer uses RAM-backed storage instead of
 continuously writing short media segments to SSD.
+
+## Audio Extraction
+
+`src/services/transcription.py` includes the first audio extraction boundary and
+FFmpeg command builder. It uses the same stable stream IDs as the ingest and
+buffer services, and it can normalize stream audio into chunk references for a
+future Faster-Whisper adapter.
+
+```text
+AUDIO_EXTRACT_DIR=/dev/shm/clutchcam-audio
+AUDIO_EXTRACT_SAMPLE_RATE=16000
+AUDIO_EXTRACT_CHANNELS=1
+AUDIO_EXTRACT_CHUNK_SECONDS=5
+AUDIO_EXTRACT_CODEC=pcm_s16le
+AUDIO_EXTRACT_CONTAINER=wav
+AUDIO_INPUT_URL_PLAYER_1=rtmp://media-server:1935/live/player_1
+AUDIO_INPUT_URL_PLAYER_2=rtmp://media-server:1935/live/player_2
+AUDIO_INPUT_URL_PLAYER_3=rtmp://media-server:1935/live/player_3
+AUDIO_INPUT_URL_PLAYER_4=rtmp://media-server:1935/live/player_4
+```
+
+If a per-player audio input URL is not set, it falls back to
+`LOOKBACK_INPUT_URL_<PLAYER>` and then `<INGEST_API_URL>/<stream_id>`. The
+extractor is not started by the terminal MVP yet.
 
 ## Running With Docker Compose
 

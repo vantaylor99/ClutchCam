@@ -117,8 +117,10 @@ The transcription layer should isolate audio per stream and call a
 Faster-Whisper-compatible API configured by `TRANSCRIPTION_API_URL`. It should
 emit `TranscriptEvent` objects rather than leaking provider-specific response
 shapes into the orchestrator.
-The current `services.transcription` module defines audio input references and a
-transcriber protocol only.
+The current `services.transcription` module defines audio input references,
+transcriber/extractor protocols, fixture extraction, and an FFmpeg audio
+extractor that can build and manage per-stream audio chunk workers. It is not
+yet wired to Faster-Whisper.
 
 ### AI Orchestration
 

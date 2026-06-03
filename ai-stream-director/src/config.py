@@ -31,6 +31,13 @@ class AppConfig:
     lookback_segment_seconds: float
     lookback_input_urls: dict[str, str]
     ffmpeg_executable: str
+    audio_extract_dir: str
+    audio_extract_sample_rate: int
+    audio_extract_channels: int
+    audio_extract_chunk_seconds: float
+    audio_extract_codec: str
+    audio_extract_container: str
+    audio_input_urls: dict[str, str]
     confidence_threshold: float
     min_switch_interval_seconds: int
     max_focus_duration_seconds: int
@@ -76,6 +83,18 @@ def get_config() -> AppConfig:
             os.getenv("INGEST_API_URL", "rtmp://localhost/live")
         ),
         ffmpeg_executable=os.getenv("FFMPEG_EXECUTABLE", "ffmpeg"),
+        audio_extract_dir=os.getenv(
+            "AUDIO_EXTRACT_DIR",
+            "/dev/shm/clutchcam-audio",
+        ),
+        audio_extract_sample_rate=int(os.getenv("AUDIO_EXTRACT_SAMPLE_RATE", "16000")),
+        audio_extract_channels=int(os.getenv("AUDIO_EXTRACT_CHANNELS", "1")),
+        audio_extract_chunk_seconds=float(os.getenv("AUDIO_EXTRACT_CHUNK_SECONDS", "5")),
+        audio_extract_codec=os.getenv("AUDIO_EXTRACT_CODEC", "pcm_s16le"),
+        audio_extract_container=os.getenv("AUDIO_EXTRACT_CONTAINER", "wav"),
+        audio_input_urls=_build_audio_input_urls(
+            os.getenv("INGEST_API_URL", "rtmp://localhost/live")
+        ),
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.75")),
         min_switch_interval_seconds=int(os.getenv("MIN_SWITCH_INTERVAL_SECONDS", "8")),
         max_focus_duration_seconds=int(os.getenv("MAX_FOCUS_DURATION_SECONDS", "20")),
@@ -107,5 +126,19 @@ def _build_lookback_input_urls(ingest_base_url: str) -> dict[str, str]:
     for stream_id in STREAM_IDS:
         env_name = f"LOOKBACK_INPUT_URL_{stream_id.upper()}"
         urls[stream_id] = os.getenv(env_name, f"{base_url}/{stream_id}")
+
+    return urls
+
+
+def _build_audio_input_urls(ingest_base_url: str) -> dict[str, str]:
+    base_url = ingest_base_url.rstrip("/")
+    urls: dict[str, str] = {}
+    for stream_id in STREAM_IDS:
+        audio_env_name = f"AUDIO_INPUT_URL_{stream_id.upper()}"
+        lookback_env_name = f"LOOKBACK_INPUT_URL_{stream_id.upper()}"
+        urls[stream_id] = os.getenv(
+            audio_env_name,
+            os.getenv(lookback_env_name, f"{base_url}/{stream_id}"),
+        )
 
     return urls

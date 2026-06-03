@@ -64,7 +64,9 @@ The `src/services/` package defines lightweight boundaries for:
   pure RTMP/SRT URL helpers.
 - `services.buffer`: `LookbackClipRequest` resolution states plus the first
   segment-based FFmpeg and fixture buffer implementations.
-- `services.transcription`: audio input references and transcript event emitters.
+- `services.transcription`: audio input references, extraction configuration,
+  fixture audio extraction, FFmpeg audio extraction command/lifecycle helpers,
+  and transcript event emitters.
 - `services.ai`: transcript or hybrid context to optional `HypeSignal` output.
 - `services.switcher`: immediate or buffered output switch requests.
 
@@ -77,7 +79,8 @@ buffer adapter starts FFmpeg only after explicit construction and `start()`.
 The repo does not yet include:
 
 - A wired runtime path that starts FFmpeg lookback buffering as part of the app.
-- Faster-Whisper audio extraction or transcription adapter code.
+- Runtime wiring that starts audio extraction workers with the app.
+- Faster-Whisper transcription adapter code.
 - OpenAI-compatible Gemma/vLLM client support.
 - Buffered clip playback through OBS or PyVMIX.
 - End-to-end tests using sample media fixtures.
