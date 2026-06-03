@@ -29,7 +29,8 @@ Deliverables:
   switcher boundaries. Boundary scaffolding exists under
   `ai-stream-director/src/services/`; behavior lands in follow-up tickets.
 - Local RTMP/SRT media server configuration. First implementation exists as an
-  SRS `media-server` Docker Compose service using `ai-stream-director/infra/srs.conf`.
+  SRS `media-server` Docker Compose service using
+  `ai-stream-director/infra/srs.conf` and has completed review.
 - FFmpeg-based rolling segment writer using `/dev/shm`. First implementation
   exists behind `services.buffer` and has completed review.
 - Clip resolver that turns `LookbackClipRequest` into concrete media ranges.
@@ -137,9 +138,7 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets:
-
-- `tickets/review/7-local-media-server-ingest.md`
+Active review tickets: none.
 
 Active implement tickets: none.
 
