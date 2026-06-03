@@ -137,10 +137,9 @@ Active review tickets:
 Active implement tickets:
 
 - `tickets/implement/6-rolling-lookback-buffer.md`
+- `tickets/implement/7-local-media-server-ingest.md`
 
-Active plan tickets:
-
-- `tickets/plan/7-local-media-server-ingest.md`
+Active plan tickets: none.
 
 Backlog tickets:
 
