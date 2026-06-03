@@ -9,7 +9,10 @@ It does four things:
 3. Sends recent transcript context to a local Ollama model.
 4. Switches OBS scenes when the AI finds a clear focus moment.
 
-It does not do real transcription, video capture, stream delay, video buffering, or OBS scene creation yet.
+It does not do real transcription, video capture, stream delay, or OBS scene
+creation yet. A first rolling lookback buffer service exists behind
+`src/services/buffer.py`, but it is not wired into the terminal MVP switching
+loop yet.
 
 ## Production Direction
 
@@ -24,10 +27,9 @@ The MVP is being shaped into the ClutchCam live media orchestration stack:
 The production architecture notes live in `../docs/ARCHITECTURE.md`. Shared event contracts for transcripts, hype signals, buffered clip requests, and switcher targets live in `src/contracts.py`.
 
 The `src/services/` package defines the production boundaries for ingestion,
-buffering, transcription, AI classification, and switching. These modules are
-scaffolding only: they are importable protocols/dataclasses and do not start
-media servers, FFmpeg, Faster-Whisper, AI clients, Docker, network calls, or OBS
-connections.
+buffering, transcription, AI classification, and switching. These modules stay
+import-safe: importing them does not start media servers, FFmpeg,
+Faster-Whisper, AI clients, Docker, network calls, or OBS connections.
 
 ## Project Structure
 
@@ -117,6 +119,38 @@ OLLAMA_BASE_URL=http://ollama:11434
 ```
 
 `GEMMA_*` names are preferred for the production architecture. `OLLAMA_*` names remain compatibility aliases for the current MVP. You can replace the model with another small local Gemma-compatible model if needed.
+
+## Rolling Lookback Buffer
+
+`src/services/buffer.py` includes a segment-based lookback buffer implementation
+for stable stream IDs `player_1` through `player_4`.
+
+- `FixtureLookbackBuffer` resolves synthetic `SegmentRecord` values for
+  deterministic tests and dry-run validation without FFmpeg.
+- `FFmpegRollingLookbackBuffer` builds one FFmpeg segment-muxer command per
+  stream and writes `.ts` segments plus `segments.csv` metadata under
+  `<LOOKBACK_BUFFER_DIR>/<stream_id>/`.
+- `resolve_clip()` returns `ready`, `pending`, or `unavailable`. Ready results
+  include a generated local playlist URI and the exact segment file URIs used.
+
+Runtime settings:
+
+```text
+LOOKBACK_BUFFER_DIR=/dev/shm/clutchcam
+LOOKBACK_WINDOW_SECONDS=30
+SWITCH_LOOKBACK_SECONDS=15
+LOOKBACK_SEGMENT_SECONDS=2
+FFMPEG_EXECUTABLE=ffmpeg
+LOOKBACK_INPUT_URL_PLAYER_1=rtmp://localhost/live/player_1
+LOOKBACK_INPUT_URL_PLAYER_2=rtmp://localhost/live/player_2
+LOOKBACK_INPUT_URL_PLAYER_3=rtmp://localhost/live/player_3
+LOOKBACK_INPUT_URL_PLAYER_4=rtmp://localhost/live/player_4
+```
+
+If a per-player input URL is not set, it defaults to
+`<INGEST_API_URL>/<stream_id>`. On Linux, keep `LOOKBACK_BUFFER_DIR` on
+`/dev/shm/clutchcam` so the rolling buffer uses RAM-backed storage instead of
+continuously writing short media segments to SSD.
 
 ## Running With Docker Compose
 
@@ -216,6 +250,12 @@ Replace `gemma3:4b` with your `GEMMA_MODEL` value if you changed it.
 If a transcript line prints `AI decision failed`, Ollama responded but did not produce a usable final decision object. Try the line again, use a lower-temperature model, or switch to a model that follows JSON instructions more reliably.
 
 ## Test Plan
+
+Validate the rolling lookback buffer logic without FFmpeg or live inputs:
+
+```powershell
+python -m unittest tests.test_rolling_buffer -v
+```
 
 For local smoke testing without OBS, set `DRY_RUN_OBS=true` in `.env` or in your shell. The app should start even when OBS is closed, `/status` should show the current dry-run scene, and manual or AI-driven scene changes should print as `[DRY RUN OBS] Scene switch: ...`.
 

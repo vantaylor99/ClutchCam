@@ -19,6 +19,9 @@ The MVP supports:
 - Ollama readiness checks and hardened JSON parsing for local model output.
 - Shared production-facing event contracts in `src/contracts.py`.
 - Importable production service boundary scaffolding in `src/services/`.
+- A first rolling lookback buffer implementation in `src/services/buffer.py`
+  with FFmpeg command construction, segment metadata rehydration, retention
+  pruning, fixture-mode tests, and local playlist clip resolution.
 
 ## What Is Partially Started
 
@@ -48,21 +51,22 @@ These contracts are not yet wired into full production services.
 The `src/services/` package defines lightweight boundaries for:
 
 - `services.ingestion`: configured `StreamSource` records and source providers.
-- `services.buffer`: `LookbackClipRequest` resolution states.
+- `services.buffer`: `LookbackClipRequest` resolution states plus the first
+  segment-based FFmpeg and fixture buffer implementations.
 - `services.transcription`: audio input references and transcript event emitters.
 - `services.ai`: transcript or hybrid context to optional `HypeSignal` output.
 - `services.switcher`: immediate or buffered output switch requests.
 
 These modules intentionally do not instantiate OBS, FFmpeg, media-server,
-transcription, AI, Docker, or network clients.
+transcription, AI, Docker, or network clients at import time. The concrete
+buffer adapter starts FFmpeg only after explicit construction and `start()`.
 
 ## What Does Not Exist Yet
 
 The repo does not yet include:
 
 - A local RTMP/SRT media server configuration.
-- FFmpeg or GStreamer processes for stream ingest and segmenting.
-- A rolling `/dev/shm` circular buffer implementation.
+- A wired runtime path that starts FFmpeg lookback buffering as part of the app.
 - Faster-Whisper audio extraction or transcription adapter code.
 - OpenAI-compatible Gemma/vLLM client support.
 - Buffered clip playback through OBS or PyVMIX.
@@ -82,6 +86,12 @@ The service-boundary tests include a clean-process import check to prove
 `services.*` modules do not pull in runtime client dependencies. Full-suite
 validation requires the dependencies in `requirements.txt`, including
 `requests` and `obsws-python`.
+
+The rolling-buffer fixture tests run without live media input or FFmpeg:
+
+```powershell
+python -m unittest tests.test_rolling_buffer -v
+```
 
 ## Known Repo Notes
 

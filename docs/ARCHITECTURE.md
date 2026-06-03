@@ -62,16 +62,18 @@ services/
   switcher.py
 ```
 
-These modules are not running services yet. They define standard-library
-protocols, dataclasses, and exceptions that future adapters can implement
-without leaking provider details into the orchestrator. Importing them must not
-instantiate OBS clients, FFmpeg subprocesses, Faster-Whisper clients, media
-servers, AI clients, Docker containers, or network connections.
+These modules define standard-library protocols, dataclasses, exceptions, and
+first adapters without leaking provider details into the orchestrator. Runtime
+work remains explicit. Importing them must not instantiate OBS clients, FFmpeg
+subprocesses, Faster-Whisper clients, media servers, AI clients, Docker
+containers, or network connections.
 
 Production defaults remain environment-driven through `config.py`, including
 `INGEST_API_URL`, `TRANSCRIPTION_API_URL`, `GEMMA_API_URL`, `GEMMA_MODEL`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
-`SWITCH_LOOKBACK_SECONDS`.
+`SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
+`LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
+`LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
 
 ## Service Responsibilities
 
@@ -89,8 +91,13 @@ The buffer layer should keep recent media in a RAM-backed path such as
 `/dev/shm/clutchcam`. The first implementation should use FFmpeg segmenting and
 simple filesystem inspection before introducing more advanced media graph
 management.
-The current `services.buffer` module accepts `LookbackClipRequest` and returns a
-ready, pending, or unavailable clip-resolution result without launching FFmpeg.
+The current `services.buffer` module implements that first pass. It can run an
+FFmpeg segment muxer per stream, rehydrate segment metadata from `segments.csv`,
+prune retained `.ts` files by the configured lookback window plus segment slack,
+and resolve `LookbackClipRequest` ranges into generated local playlists. Ready
+clip results include both the playlist URI and the exact segment file URIs.
+Fixture mode accepts synthetic `SegmentRecord` values so tests do not require
+live RTMP/SRT input or an installed FFmpeg binary.
 
 ### Transcription
 
@@ -162,7 +169,7 @@ the current MVP.
 
 ## Near-Term Sequence
 
-1. Implement the rolling FFmpeg lookback buffer behind `services.buffer`.
+1. Wire the implemented rolling FFmpeg lookback buffer into buffered switching.
 2. Add local media-server ingest behind `services.ingestion`.
 3. Add a transcription adapter that emits `TranscriptEvent` objects.
 4. Generalize the AI director for OpenAI-compatible Gemma endpoints.

@@ -52,6 +52,32 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
         self.assertEqual(config.lookback_window_seconds, 30)
         self.assertEqual(config.switch_lookback_seconds, 15)
+        self.assertEqual(config.lookback_segment_seconds, 2.0)
+        self.assertEqual(config.ffmpeg_executable, "ffmpeg")
+        self.assertEqual(
+            config.lookback_input_urls["player_1"],
+            "rtmp://localhost/live/player_1",
+        )
+
+    def test_lookback_input_urls_accept_per_stream_overrides(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "INGEST_API_URL": "srt://media-router/live",
+                "LOOKBACK_INPUT_URL_PLAYER_3": "srt://player-three:9000",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(
+            config.lookback_input_urls["player_1"],
+            "srt://media-router/live/player_1",
+        )
+        self.assertEqual(
+            config.lookback_input_urls["player_3"],
+            "srt://player-three:9000",
+        )
 
 
 class DryRunOBSControllerTests(unittest.TestCase):

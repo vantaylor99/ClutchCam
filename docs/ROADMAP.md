@@ -29,9 +29,12 @@ Deliverables:
   switcher boundaries. Boundary scaffolding exists under
   `ai-stream-director/src/services/`; behavior lands in follow-up tickets.
 - Local RTMP/SRT media server configuration.
-- FFmpeg-based rolling segment writer using `/dev/shm`.
+- FFmpeg-based rolling segment writer using `/dev/shm`. First implementation
+  exists behind `services.buffer` and awaits review.
 - Clip resolver that turns `LookbackClipRequest` into concrete media ranges.
-- Fixture mode for repeatable tests without live inputs.
+  First implementation exists behind `services.buffer` and awaits review.
+- Fixture mode for repeatable tests without live inputs. First implementation
+  exists behind `services.buffer` and awaits review.
 
 Success criteria:
 
@@ -130,11 +133,12 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets: none.
+Active review tickets:
+
+- `tickets/review/6-rolling-lookback-buffer.md`
 
 Active implement tickets:
 
-- `tickets/implement/6-rolling-lookback-buffer.md`
 - `tickets/implement/7-local-media-server-ingest.md`
 
 Active plan tickets: none.
