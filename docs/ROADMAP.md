@@ -134,9 +134,12 @@ Active review tickets:
 
 - `tickets/review/5-production-service-boundaries.md`
 
+Active implement tickets:
+
+- `tickets/implement/6-rolling-lookback-buffer.md`
+
 Active plan tickets:
 
-- `tickets/plan/6-rolling-lookback-buffer.md`
 - `tickets/plan/7-local-media-server-ingest.md`
 
 Backlog tickets:
