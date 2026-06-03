@@ -2,6 +2,8 @@ import os
 from dataclasses import dataclass
 
 
+STREAM_IDS = ("player_1", "player_2", "player_3", "player_4")
+
 SCENES = {
     "quad": "Quad View",
     "player_1": "Player 1 Fullscreen",
@@ -19,14 +21,27 @@ class AppConfig:
     obs_port: int
     obs_password: str
     dry_run_obs: bool
-    ollama_base_url: str
-    ollama_model: str
+    ingest_api_url: str
+    transcription_api_url: str
+    gemma_api_url: str
+    gemma_model: str
+    lookback_buffer_dir: str
+    lookback_window_seconds: int
+    switch_lookback_seconds: int
     confidence_threshold: float
     min_switch_interval_seconds: int
     max_focus_duration_seconds: int
     transcript_history_seconds: int
     transcript_history_messages: int
     default_scene: str
+
+    @property
+    def ollama_base_url(self) -> str:
+        return self.gemma_api_url
+
+    @property
+    def ollama_model(self) -> str:
+        return self.gemma_model
 
 
 def get_config() -> AppConfig:
@@ -35,8 +50,24 @@ def get_config() -> AppConfig:
         obs_port=int(os.getenv("OBS_PORT", "4455")),
         obs_password=os.getenv("OBS_PASSWORD", ""),
         dry_run_obs=_parse_bool(os.getenv("DRY_RUN_OBS", "false")),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "gemma3:4b"),
+        ingest_api_url=os.getenv("INGEST_API_URL", "rtmp://localhost/live"),
+        transcription_api_url=os.getenv(
+            "TRANSCRIPTION_API_URL",
+            "http://faster-whisper:8000",
+        ),
+        gemma_api_url=_compat_env(
+            primary_name="GEMMA_API_URL",
+            fallback_name="OLLAMA_BASE_URL",
+            default="http://ollama:11434",
+        ),
+        gemma_model=_compat_env(
+            primary_name="GEMMA_MODEL",
+            fallback_name="OLLAMA_MODEL",
+            default="gemma3:4b",
+        ),
+        lookback_buffer_dir=os.getenv("LOOKBACK_BUFFER_DIR", "/dev/shm/clutchcam"),
+        lookback_window_seconds=int(os.getenv("LOOKBACK_WINDOW_SECONDS", "30")),
+        switch_lookback_seconds=int(os.getenv("SWITCH_LOOKBACK_SECONDS", "15")),
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.75")),
         min_switch_interval_seconds=int(os.getenv("MIN_SWITCH_INTERVAL_SECONDS", "8")),
         max_focus_duration_seconds=int(os.getenv("MAX_FOCUS_DURATION_SECONDS", "20")),
@@ -48,3 +79,15 @@ def get_config() -> AppConfig:
 
 def _parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _compat_env(primary_name: str, fallback_name: str, default: str) -> str:
+    value = os.getenv(primary_name)
+    if value is not None:
+        return value
+
+    value = os.getenv(fallback_name)
+    if value is not None:
+        return value
+
+    return default

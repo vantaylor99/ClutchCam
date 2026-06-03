@@ -11,11 +11,24 @@ It does four things:
 
 It does not do real transcription, video capture, stream delay, video buffering, or OBS scene creation yet.
 
+## Production Direction
+
+The MVP is being shaped into the ClutchCam live media orchestration stack:
+
+1. Local RTMP/SRT ingestion keeps raw live media on the local network.
+2. FFmpeg or GStreamer writes each feed into a rolling `/dev/shm` lookback buffer.
+3. Faster-Whisper emits timestamped transcript events per stream.
+4. Local rules and Gemma classify hype moments through environment-configured APIs.
+5. OBS or PyVMIX switches the master output using buffered media from before the trigger.
+
+The production architecture notes live in `../docs/ARCHITECTURE.md`. Shared event contracts for transcripts, hype signals, buffered clip requests, and switcher targets live in `src/contracts.py`.
+
 ## Project Structure
 
 ```text
 ai-stream-director/
   src/
+    contracts.py
     main.py
     obs_controller.py
     ai_director.py
@@ -84,10 +97,13 @@ Dry-run mode skips the OBS WebSocket connection and prints scene switches to the
 The default Ollama model is:
 
 ```text
+GEMMA_MODEL=gemma3:4b
+GEMMA_API_URL=http://ollama:11434
 OLLAMA_MODEL=gemma3:4b
+OLLAMA_BASE_URL=http://ollama:11434
 ```
 
-You can replace it with another small Ollama model if needed.
+`GEMMA_*` names are preferred for the production architecture. `OLLAMA_*` names remain compatibility aliases for the current MVP. You can replace the model with another small local Gemma-compatible model if needed.
 
 ## Running With Docker Compose
 
@@ -107,7 +123,7 @@ docker compose run --rm ollama-pull
 docker compose run --rm app
 ```
 
-At startup, the app checks that Ollama is reachable and that `OLLAMA_MODEL` appears in Ollama's model list. If the model is missing, pull it before starting the app:
+At startup, the app checks that the configured Gemma/Ollama endpoint is reachable and that `GEMMA_MODEL` appears in the model list. If the model is missing, pull it before starting the app:
 
 ```powershell
 ollama pull gemma3:4b
@@ -174,7 +190,7 @@ The parser also tolerates small formatting mistakes from local models, such as m
 
 ## Troubleshooting
 
-If startup prints `AI director is not ready: Ollama is not reachable`, start Ollama or check `OLLAMA_BASE_URL`.
+If startup prints `AI director is not ready: Ollama is not reachable`, start Ollama or check `GEMMA_API_URL`.
 
 If startup prints that the configured model is not installed, run:
 
@@ -182,7 +198,7 @@ If startup prints that the configured model is not installed, run:
 ollama pull gemma3:4b
 ```
 
-Replace `gemma3:4b` with your `OLLAMA_MODEL` value if you changed it.
+Replace `gemma3:4b` with your `GEMMA_MODEL` value if you changed it.
 
 If a transcript line prints `AI decision failed`, Ollama responded but did not produce a usable final decision object. Try the line again, use a lower-temperature model, or switch to a model that follows JSON instructions more reliably.
 
@@ -250,25 +266,17 @@ $env:OBS_HOST="127.0.0.1"
 $env:OBS_PORT="4455"
 $env:OBS_PASSWORD="your-obs-websocket-password"
 $env:DRY_RUN_OBS="true" # optional: skip OBS WebSocket for local smoke testing
-$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
+$env:GEMMA_API_URL="http://127.0.0.1:11434"
 python src/main.py
 ```
 
 ## Next Steps
 
-Real transcription can be added later by replacing manual terminal input with transcript events from a speech-to-text pipeline.
+The next implementation work is tracked in Tess tickets under `../tickets/` and
+summarized in `../docs/ROADMAP.md`.
 
-A likely next architecture:
-
-1. Capture each player audio track separately.
-2. Run local or cloud speech-to-text for each player.
-3. Normalize transcript events into the same format used by `TranscriptRouter`.
-4. Keep the scheduler and OBS controller mostly unchanged.
-5. Add debounce rules for noisy transcription, overlapping speech, and false excitement.
-6. Later, add stream delay and video buffering so OBS can cut to the moment viewers should see, not just the moment the transcript arrives.
-
-The important part is that real transcription should feed the same simple event shape:
-
-```text
-player_3: no way, I just found something crazy
-```
+The most important near-term shift is replacing manual terminal transcript input
+with timestamped `TranscriptEvent` objects while keeping the scheduler and OBS
+controller mostly unchanged. After that, buffered switching can use
+`LookbackClipRequest` to cut to media from before a trigger instead of switching
+only to the live moment.

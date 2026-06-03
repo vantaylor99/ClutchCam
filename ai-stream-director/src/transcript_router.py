@@ -2,6 +2,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
+from contracts import TranscriptEvent
+
 
 VALID_SPEAKERS = {"player_1", "player_2", "player_3", "player_4"}
 
@@ -11,6 +13,15 @@ class TranscriptMessage:
     speaker: str
     text: str
     timestamp: float
+
+    def to_event(self) -> TranscriptEvent:
+        return TranscriptEvent(
+            stream_id=self.speaker,
+            text=self.text,
+            start_time_seconds=self.timestamp,
+            end_time_seconds=self.timestamp,
+            is_final=True,
+        )
 
 
 class TranscriptRouter:

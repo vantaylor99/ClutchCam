@@ -44,8 +44,8 @@ def main() -> int:
             password=config.obs_password,
         )
     ai_director = AIDirector(
-        ollama_base_url=config.ollama_base_url,
-        model=config.ollama_model,
+        ollama_base_url=config.gemma_api_url,
+        model=config.gemma_model,
     )
     transcript_router = TranscriptRouter(
         history_seconds=config.transcript_history_seconds,

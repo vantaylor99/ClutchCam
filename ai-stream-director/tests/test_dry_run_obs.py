@@ -25,6 +25,34 @@ class DryRunOBSConfigTests(unittest.TestCase):
                 with patch.dict(os.environ, {"DRY_RUN_OBS": value}, clear=True):
                     self.assertTrue(get_config().dry_run_obs)
 
+    def test_prefers_gemma_env_names_over_ollama_compat_aliases(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMMA_API_URL": "http://gemma:8000",
+                "GEMMA_MODEL": "gemma4:e4b",
+                "OLLAMA_BASE_URL": "http://ollama:11434",
+                "OLLAMA_MODEL": "gemma3:4b",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.gemma_api_url, "http://gemma:8000")
+        self.assertEqual(config.gemma_model, "gemma4:e4b")
+        self.assertEqual(config.ollama_base_url, "http://gemma:8000")
+        self.assertEqual(config.ollama_model, "gemma4:e4b")
+
+    def test_production_boundary_defaults_are_available(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_config()
+
+        self.assertEqual(config.ingest_api_url, "rtmp://localhost/live")
+        self.assertEqual(config.transcription_api_url, "http://faster-whisper:8000")
+        self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
+        self.assertEqual(config.lookback_window_seconds, 30)
+        self.assertEqual(config.switch_lookback_seconds, 15)
+
 
 class DryRunOBSControllerTests(unittest.TestCase):
     def test_requires_connect_before_use(self) -> None:
