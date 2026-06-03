@@ -141,9 +141,7 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets:
-
-- `tickets/review/7-transcription-audio-extraction.md`
+Active review tickets: none.
 
 Active implement tickets: none.
 
@@ -152,6 +150,7 @@ Active plan tickets: none.
 Completed review tickets:
 
 - `tickets/complete/5-mvp-end-to-end-review.md`
+- `tickets/complete/7-transcription-audio-extraction.md`
 
 Backlog tickets:
 

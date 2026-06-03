@@ -89,7 +89,11 @@ class FFmpegAudioExtractorTests(unittest.TestCase):
         self.assertIn("2", command)
         self.assertIn("24000", command)
         self.assertIn("3", command)
-        self.assertTrue(str(command[-1]).endswith("player_1\\%09d.wav") or str(command[-1]).endswith("player_1/%09d.wav"))
+        output_pattern = str(command[-1])
+        self.assertTrue(
+            output_pattern.endswith("player_1\\%09d.wav")
+            or output_pattern.endswith("player_1/%09d.wav")
+        )
 
     def test_missing_input_url_fails_before_subprocess_launch(self) -> None:
         config = AudioExtractionConfig(
