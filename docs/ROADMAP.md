@@ -166,7 +166,9 @@ Active review tickets: none.
 
 Active implement tickets:
 
+- `tickets/implement/32-runtime-healthcheck-entrypoints.md`
 - `tickets/implement/33-local-checkpoint-smoke-runner.md`
+- `tickets/implement/35-local-ai-model-readiness-checkpoint.md`
 
 Active plan tickets: none.
 
@@ -211,7 +213,5 @@ Backlog tickets:
 - `tickets/backlog/29-obs-buffered-media-source-adapter.md`
 - `tickets/backlog/30-runtime-event-pipeline-wiring.md`
 - `tickets/backlog/31-faster-whisper-compose-profile.md`
-- `tickets/backlog/32-runtime-healthcheck-entrypoints.md`
 - `tickets/backlog/34-compose-generated-ingest-checkpoint.md`
-- `tickets/backlog/35-local-ai-model-readiness-checkpoint.md`
 - `tickets/backlog/90-optional-vision-keyframe-analysis.md`

@@ -13,3 +13,16 @@ Expected behavior:
 - Make Docker Compose healthchecks call the same lightweight checks where
   practical.
 - Ensure health failures return clear degraded/unhealthy reasons for operators.
+
+TODO:
+
+- Inspect existing `services.health` and worker entrypoints before choosing the
+  smallest runtime surface.
+- Add import-safe healthcheck helpers or CLI commands for buffer worker,
+  transcription worker, AI endpoint, and orchestrator readiness.
+- Add Docker Compose `healthcheck` blocks where they can run without side
+  effects or long waits.
+- Add unit tests that mock filesystem, HTTP, and subprocess boundaries.
+- Keep checks bounded and deterministic; no test may require Docker, FFmpeg,
+  SRS, OBS, Ollama, Faster-Whisper, GPUs, or network access.
+- Run focused tests covering health checks and Compose healthcheck declarations.
