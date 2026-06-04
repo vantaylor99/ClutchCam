@@ -99,7 +99,8 @@ only switching live.
 
 Deliverables:
 
-- Buffer clip resolution and playback path for OBS.
+- Buffer clip resolution and a buffer-backed switch target boundary.
+- OBS media-source playback path that consumes resolved buffered media.
 - Switcher interface that can later support PyVMIX.
 - Manual operator override preserved.
 - Cooldown, focus duration, and return-to-quad behavior preserved.
@@ -147,9 +148,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/13-buffered-switcher-playback.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -160,6 +159,7 @@ Completed review tickets:
 - `tickets/complete/10-gemma-orchestration-adapter.md`
 - `tickets/complete/11-openai-compatible-gemma-client.md`
 - `tickets/complete/12-buffer-clip-resolver.md`
+- `tickets/complete/13-buffered-switcher-playback.md`
 - `tickets/complete/1-nonblocking-terminal-loop.md`
 - `tickets/complete/2-local-smoke-test-mode.md`
 - `tickets/complete/3-ollama-readiness-and-json-hardening.md`

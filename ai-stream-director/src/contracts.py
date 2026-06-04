@@ -48,3 +48,4 @@ class SwitcherTarget:
     stream_id: str
     scene_name: str
     clip_request: LookbackClipRequest | None = None
+    media_uri: str | None = None

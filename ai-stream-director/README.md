@@ -6,17 +6,17 @@ It does four things:
 
 1. Connects to manually created OBS scenes through OBS WebSocket.
 2. Accepts fake transcript lines for 4 players in the terminal.
-3. Sends recent transcript context to a local Ollama model.
+3. Sends recent transcript context to local Ollama or an OpenAI-compatible AI
+   endpoint.
 4. Switches OBS scenes when the AI finds a clear focus moment.
 
-It does not wire real transcription, video capture, stream delay, or OBS scene
-creation into the runtime loop yet. A first rolling lookback buffer service exists behind
-`src/services/buffer.py`, but it is not wired into the terminal MVP switching
-loop yet. A local SRS media-server service is available through Docker Compose
-for RTMP/SRT ingest, but the terminal MVP does not consume those feeds yet. A
-first FFmpeg audio extraction service exists behind `src/services/transcription.py`,
-along with a Faster-Whisper-compatible HTTP adapter, but neither is started by
-the terminal MVP yet.
+It does not wire real transcription, video capture, stream delay, OBS scene
+creation, or OBS media-source mutation into the terminal MVP loop yet. Local SRS
+ingest, rolling FFmpeg lookback buffering, audio extraction, Faster-Whisper HTTP
+transcription, runtime workers, and buffer-backed switch resolution now exist
+behind service boundaries and Compose profiles. The terminal MVP still consumes
+typed transcript lines and applies immediate scene changes unless future runtime
+wiring supplies real transcript events and buffered playback targets.
 
 ## Production Direction
 
@@ -34,6 +34,12 @@ The `src/services/` package defines the production boundaries for ingestion,
 buffering, transcription, AI classification, and switching. These modules stay
 import-safe: importing them does not start media servers, FFmpeg,
 Faster-Whisper, AI clients, Docker, network calls, or OBS connections.
+
+`src/services/switcher.py` can now turn a stream-focused hype signal into a
+`LookbackClipRequest`, resolve it against a lookback buffer, and expose the
+ready buffered media URI on a `SwitcherTarget`. A later OBS-specific adapter
+still needs to update or preload an OBS media source with that URI before
+performing the program cut.
 
 ## Project Structure
 

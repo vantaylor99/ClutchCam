@@ -1,6 +1,6 @@
 # Current Project Status
 
-Last updated: 2026-06-03.
+Last updated: 2026-06-04.
 
 ## What Exists
 
@@ -17,6 +17,9 @@ The MVP supports:
 - Manual terminal commands such as `/quad`, `/p1`, `/ai off`, and `/status`.
 - Non-blocking terminal input so scheduler timers keep advancing.
 - Ollama readiness checks and hardened JSON parsing for local model output.
+- OpenAI-compatible Gemma/vLLM provider support through `AI_PROVIDER`,
+  `GEMMA_API_URL`, `GEMMA_MODEL`, and optional `GEMMA_API_KEY`.
+- Local transcript pre-filtering before expensive model calls.
 - Shared production-facing event contracts in `src/contracts.py`.
 - Importable production service boundary scaffolding in `src/services/`.
 - A first rolling lookback buffer implementation in `src/services/buffer.py`
@@ -26,6 +29,11 @@ The MVP supports:
   The `media-server` service mounts `ai-stream-director/infra/srs.conf`,
   exposes RTMP, SRT, the SRS HTTP API, and HTTP stream output, and publishes
   stable streams under `live/player_1` through `live/player_4`.
+- Runtime entrypoints for the buffer worker and transcription worker.
+- Health-check and structured-log primitives for service runtimes.
+- No-player smoke entrypoints under `ai-stream-director/scripts/` for media
+  server, buffer worker, transcription API, AI endpoint, and dry-run
+  orchestrator checks.
 
 ## What Is Partially Started
 
@@ -33,7 +41,9 @@ Production-oriented configuration has been introduced:
 
 - `GEMMA_API_URL`
 - `GEMMA_MODEL`
+- `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
+- `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
 - `INGEST_API_URL`
 - `LOOKBACK_BUFFER_DIR`
 - `LOOKBACK_WINDOW_SECONDS`
@@ -41,8 +51,8 @@ Production-oriented configuration has been introduced:
 - SRS Docker settings: `SRS_IMAGE`, `SRS_BIND_ADDR`, `SRS_RTMP_PORT`,
   `SRS_HTTP_API_PORT`, `SRS_HTTP_STREAM_PORT`, and `SRS_SRT_PORT`
 
-`OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain compatibility aliases while the MVP
-still talks to Ollama's native API shape.
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain compatibility aliases. The native
+Ollama provider and OpenAI-compatible provider are both implemented.
 
 For the Docker Compose stack, `INGEST_API_URL` defaults to
 `rtmp://media-server:1935/live` so future FFmpeg buffer workers can build
@@ -54,9 +64,10 @@ The shared contracts currently define:
 - `TranscriptEvent`
 - `HypeSignal`
 - `LookbackClipRequest`
-- `SwitcherTarget`
+- `SwitcherTarget`, including optional resolved buffered media URI
 
-These contracts are not yet wired into full production services.
+These contracts are partially wired into service boundaries, but not yet into a
+single end-to-end production runtime.
 
 The `src/services/` package defines lightweight boundaries for:
 
@@ -68,7 +79,9 @@ The `src/services/` package defines lightweight boundaries for:
   fixture audio extraction, FFmpeg audio extraction command/lifecycle helpers,
   a Faster-Whisper-compatible HTTP adapter, and transcript event emitters.
 - `services.ai`: transcript or hybrid context to optional `HypeSignal` output.
-- `services.switcher`: immediate or buffered output switch requests.
+- `services.switcher`: immediate scene switches, hype-signal-to-buffered-target
+  helpers, buffer-backed clip resolution, and ready/pending/rejected switch
+  results.
 
 These modules intentionally do not instantiate OBS, FFmpeg, media-server,
 transcription, AI, Docker, or network clients at import time. The concrete
@@ -78,18 +91,18 @@ buffer adapter starts FFmpeg only after explicit construction and `start()`.
 
 The repo does not yet include:
 
-- A wired runtime path that starts FFmpeg lookback buffering as part of the app.
-- Runtime wiring that starts audio extraction workers with the app.
-- Runtime wiring that sends extracted audio chunks to Faster-Whisper.
-- OpenAI-compatible Gemma/vLLM client support.
-- Buffered clip playback through OBS or PyVMIX.
+- A single end-to-end runtime that starts media ingest, FFmpeg buffering, audio
+  extraction, transcription, AI orchestration, and switching together.
+- Live Docker/Linux validation against real SRS, FFmpeg, Faster-Whisper, Ollama,
+  and OBS processes.
+- OBS or PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
-- Production observability, health checks, or deployment documentation.
+- Production deployment documentation and operator recovery runbooks.
 
 ## Validation
 
-The current Python unit suite covers the existing MVP boundaries and the new
-contract/config scaffolding. Run it from `ai-stream-director/`:
+The current Python unit suite covers the existing MVP boundaries and production
+service scaffolding. Run it from `ai-stream-director/`:
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -104,6 +117,13 @@ The rolling-buffer fixture tests run without live media input or FFmpeg:
 
 ```powershell
 python -m unittest tests.test_rolling_buffer -v
+```
+
+The buffered switcher tests run without OBS, PyVMIX, FFmpeg, Docker, or real
+media:
+
+```powershell
+python -m unittest tests.test_buffered_switcher -v
 ```
 
 The local ingest configuration tests run without Docker, FFmpeg, or network

@@ -150,8 +150,13 @@ the raw decision string before the same strict director parsing runs.
 The switcher layer should support immediate OBS scene changes during the MVP and
 buffered playback for production. A positive trigger should map to a
 `LookbackClipRequest`, resolve playable media, and then switch the master output.
-The current `services.switcher` module keeps immediate scene changes and future
-buffered playback behind one output-switching protocol.
+The current `services.switcher` module keeps immediate scene changes and
+buffered clip resolution behind one output-switching protocol. It can resolve a
+buffered target to a ready media URI, return pending/rejected states, and pass
+ready targets to a downstream scene switcher. The OBS-specific media-source
+adapter is still a follow-up: it must set or preload a media source from the
+ready URI, wait for that source to be playable, and then perform the program
+cut without breaking manual override, cooldown, and return-to-quad behavior.
 
 ## Core Contracts
 
@@ -164,7 +169,8 @@ process calls:
   and trigger time.
 - `LookbackClipRequest`: the stream and time range the buffer service must
   expose for switching.
-- `SwitcherTarget`: the final scene/output request sent to OBS or PyVMIX.
+- `SwitcherTarget`: the final scene/output request sent to OBS or PyVMIX,
+  optionally including a resolved buffered media URI.
 
 These contracts live in `ai-stream-director/src/contracts.py` so the MVP and
 future services share one vocabulary.
@@ -225,8 +231,8 @@ GEMMA_API_KEY=<token>
 2. Wire audio extraction and the Faster-Whisper adapter into a runtime
    transcript event path.
 3. Generalize the AI director for OpenAI-compatible Gemma endpoints.
-4. Add buffered switch playback so OBS/PyVMIX cuts to
-   `trigger_time - pre_roll`.
+4. Add the OBS/PyVMIX media-source adapter that consumes resolved buffered
+   media URIs and cuts to `trigger_time - pre_roll`.
 
 See `docs/ROADMAP.md` for the staged implementation plan and `tickets/` for
 the executable Tess backlog.

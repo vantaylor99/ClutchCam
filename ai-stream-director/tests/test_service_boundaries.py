@@ -25,7 +25,12 @@ from services.ingestion import (  # noqa: E402
     StaticStreamSourceProvider,
     build_configured_sources,
 )
-from services.switcher import SwitchResult, SwitchStatus  # noqa: E402
+from services.switcher import (  # noqa: E402
+    BufferBackedSwitcher,
+    SwitchResult,
+    SwitchStatus,
+    buffered_target_from_signal,
+)
 from services.transcription import AudioInputRef  # noqa: E402
 
 
@@ -206,11 +211,46 @@ class SwitcherBoundaryTests(unittest.TestCase):
             stream_id="player_3",
             scene_name="Player 3 Fullscreen",
             clip_request=request,
+            media_uri="file:///buffer/player_3/clip.m3u8",
         )
-        result = SwitchResult(target=target, status=SwitchStatus.APPLIED)
+        result = SwitchResult(
+            target=target,
+            status=SwitchStatus.APPLIED,
+            segment_uris=("file:///buffer/player_3/000.ts",),
+        )
 
         self.assertEqual(result.target.clip_request, request)
+        self.assertEqual(result.target.media_uri, "file:///buffer/player_3/clip.m3u8")
         self.assertEqual(result.status, SwitchStatus.APPLIED)
+        self.assertEqual(result.segment_uris, ("file:///buffer/player_3/000.ts",))
+
+    def test_buffered_target_helper_uses_hype_signal_trigger_time(self) -> None:
+        signal = HypeSignal(
+            stream_id="player_4",
+            trigger_time_seconds=90.0,
+            confidence=0.95,
+            reason="rare drop",
+        )
+
+        target = buffered_target_from_signal(signal, pre_roll_seconds=15)
+
+        self.assertEqual(target.stream_id, "player_4")
+        self.assertEqual(target.scene_name, "Player 4 Fullscreen")
+        self.assertIsNotNone(target.clip_request)
+        self.assertEqual(target.clip_request.start_time_seconds, 75.0)
+        self.assertEqual(target.clip_request.trigger_time_seconds, 90.0)
+
+    def test_buffered_switcher_boundary_rejects_targets_without_clip_requests(self) -> None:
+        class EmptyBuffer:
+            def resolve_clip(self, request):
+                raise AssertionError("resolve_clip should not be called")
+
+        result = BufferBackedSwitcher(EmptyBuffer()).switch(
+            SwitcherTarget(stream_id="player_1", scene_name="Player 1 Fullscreen")
+        )
+
+        self.assertEqual(result.status, SwitchStatus.REJECTED)
+        self.assertIn("clip request", result.reason)
 
 
 if __name__ == "__main__":
