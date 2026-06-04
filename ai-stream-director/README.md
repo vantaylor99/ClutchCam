@@ -54,6 +54,12 @@ ai-stream-director/
     ai_director.py
     transcript_router.py
     scheduler.py
+  scripts/
+    smoke_media_server.py
+    smoke_buffer_worker.py
+    smoke_transcription_api.py
+    smoke_ai_endpoint.py
+    smoke_orchestrator_dry_run.py
   docker-compose.yml
   Dockerfile
   infra/
@@ -371,6 +377,103 @@ At startup, the app checks that the configured Gemma/Ollama endpoint is reachabl
 
 ```powershell
 ollama pull gemma3:4b
+```
+
+## Linux Local Stack Smoke Sequence
+
+The `scripts/smoke_*.py` entrypoints are no-player smoke checks for the local
+Linux stack. They are import-safe, timeout-bound, and environment-driven. Unit
+tests mock subprocess and HTTP boundaries, so these scripts can be validated
+without Docker, FFmpeg, SRS, OBS, GPUs, cloud credentials, or live network
+endpoints.
+
+From `ai-stream-director/`, start the local media and buffer services:
+
+```bash
+COMPOSE_PROFILES=media-server,buffer-worker \
+docker compose up -d --build media-server buffer-worker
+```
+
+Smoke SRS readiness and publish one short generated RTMP source. Omit
+`--no-compose` if you want the script to start the `media-server` service for
+you.
+
+```bash
+SMOKE_PUBLISH_STREAMS=player_1 \
+python scripts/smoke_media_server.py --no-compose
+```
+
+Expected result: JSON with the SRS summaries URL and a `publish_results` entry
+for `player_1`. A failure names the failed Docker, HTTP, or FFmpeg boundary and
+uses the configured timeout. Set `SMOKE_SKIP_PUBLISH=true` to check only
+`/api/v1/summaries`, or set `SRS_HTTP_API_URL`/`SRS_RTMP_HOST` to target a
+remote media server.
+
+After FFmpeg has published for a few seconds, inspect the host buffer directory:
+
+```bash
+sleep 4
+LOOKBACK_BUFFER_DIR=${LOOKBACK_BUFFER_HOST_DIR:-/dev/shm/clutchcam} \
+SMOKE_BUFFER_STREAM_IDS=player_1 \
+python scripts/smoke_buffer_worker.py
+```
+
+Expected result: JSON reporting stream IDs, latest segment metadata, and a
+`clip_status` of `ready` for at least one stream. `pending` or `unavailable`
+results include a reason, such as missing `segments.csv` metadata or absent
+segment files.
+
+Smoke a Faster-Whisper-compatible transcription endpoint when one is available:
+
+```bash
+TRANSCRIPTION_API_URL=http://127.0.0.1:8000 \
+python scripts/smoke_transcription_api.py
+```
+
+Expected result: JSON with `<TRANSCRIPTION_API_URL>/transcribe`, the generated
+fixture audio URI, request timeout, and transcript event count. Set
+`SMOKE_TRANSCRIPTION_AUDIO_URI` to an endpoint-readable fixture when the API
+runs on another machine or container.
+
+Smoke the configured AI endpoint. For Ollama, the smoke verifies that
+`GEMMA_MODEL` appears in `/api/tags`:
+
+```bash
+AI_PROVIDER=ollama \
+GEMMA_API_URL=http://127.0.0.1:11434 \
+GEMMA_MODEL=gemma3:4b \
+python scripts/smoke_ai_endpoint.py
+```
+
+For an OpenAI-compatible server, the smoke checks reachability and sends an
+authorization header when `GEMMA_API_KEY` is set:
+
+```bash
+AI_PROVIDER=openai-compatible \
+GEMMA_API_URL=https://gemma-gpu.example.internal/v1/chat/completions \
+GEMMA_MODEL=google/gemma-3-4b-it \
+python scripts/smoke_ai_endpoint.py
+```
+
+Smoke the terminal orchestrator without OBS, Ollama, or cloud credentials:
+
+```bash
+python scripts/smoke_orchestrator_dry_run.py
+```
+
+By default this starts `src/main.py` with `DRY_RUN_OBS=true`, feeds `/status`,
+`/ai off`, a deterministic transcript line, `/p2`, `/quad`, and `/quit`, and
+serves a tiny localhost OpenAI-compatible readiness fixture. Expected output in
+the JSON `stdout` field includes `DRY_RUN_OBS enabled`,
+`[DRY RUN OBS] Starting scene: Quad View`, `Manual command applied.`, and
+`Exiting.` Set `SMOKE_ORCHESTRATOR_FAKE_AI=false` to use your real
+`GEMMA_API_URL` instead.
+
+Shut the local stack down when the smoke pass is complete:
+
+```bash
+COMPOSE_PROFILES=media-server,buffer-worker \
+docker compose down
 ```
 
 ## Terminal Input Format
