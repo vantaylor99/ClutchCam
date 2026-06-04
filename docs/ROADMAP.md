@@ -148,7 +148,9 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
+
+- `tickets/implement/14-sample-media-integration-harness.md`
 
 Active plan tickets: none.
 
@@ -187,7 +189,10 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/14-sample-media-integration-harness.md`
 - `tickets/backlog/16-local-linux-compose-stack.md`
 - `tickets/backlog/17-vision-keyframe-analysis.md`
 - `tickets/backlog/18-operator-runbooks.md`
+- `tickets/backlog/29-obs-buffered-media-source-adapter.md`
+- `tickets/backlog/30-runtime-event-pipeline-wiring.md`
+- `tickets/backlog/31-faster-whisper-compose-profile.md`
+- `tickets/backlog/32-runtime-healthcheck-entrypoints.md`
