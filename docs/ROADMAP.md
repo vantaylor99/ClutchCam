@@ -149,18 +149,13 @@ Active review tickets: none.
 
 Active implement tickets:
 
-- `tickets/implement/19-ai-disabled-skips-model-call.md`
-- `tickets/implement/19-local-ai-dev-quickstart.md`
-- `tickets/implement/20-local-srs-dev-quickstart.md`
+- `tickets/implement/20-terminal-prompt-log-interleaving.md`
+- `tickets/implement/21-dry-run-obs-without-obs-dependency.md`
+- `tickets/implement/21-transcript-trigger-prefilter.md`
 
-Active plan tickets:
+Active plan tickets: none.
 
-- `tickets/plan/9-transcript-trigger-prefilter.md`
-
-Active fix tickets:
-
-- `tickets/fix/20-terminal-prompt-log-interleaving.md`
-- `tickets/fix/21-dry-run-obs-without-obs-dependency.md`
+Active fix tickets: none.
 
 Completed review tickets:
 
@@ -174,6 +169,9 @@ Completed review tickets:
 - `tickets/complete/7-local-media-server-ingest.md`
 - `tickets/complete/7-transcription-audio-extraction.md`
 - `tickets/complete/8-transcription-event-api.md`
+- `tickets/complete/19-ai-disabled-skips-model-call.md`
+- `tickets/complete/19-local-ai-dev-quickstart.md`
+- `tickets/complete/20-local-srs-dev-quickstart.md`
 - `tickets/complete/22-python-bytecode-artifacts-dirty-worktree.md`
 
 Backlog tickets:

@@ -1,7 +1,9 @@
+import io
 import os
 import sys
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,9 +13,10 @@ sys.path.insert(0, str(SRC_DIR))
 
 from config import SCENES, get_config  # noqa: E402
 from ai_director import DirectorDecision  # noqa: E402
-from main import find_missing_scenes  # noqa: E402
+from main import find_missing_scenes, process_line  # noqa: E402
 from obs_controller import DryRunOBSController, OBSController  # noqa: E402
 from scheduler import SceneScheduler  # noqa: E402
+from transcript_router import TranscriptRouter  # noqa: E402
 
 
 class DryRunOBSConfigTests(unittest.TestCase):
@@ -140,6 +143,77 @@ class OBSSceneValidationTests(unittest.TestCase):
             ),
             [],
         )
+
+
+class TerminalProcessLineAITests(unittest.TestCase):
+    def _build_started_scheduler(self) -> SceneScheduler:
+        controller = DryRunOBSController(initial_scene=SCENES["quad"])
+        scheduler = SceneScheduler(
+            obs_controller=controller,
+            default_scene=SCENES["quad"],
+            confidence_threshold=0.75,
+            min_switch_interval_seconds=0,
+            max_focus_duration_seconds=20,
+        )
+        controller.connect()
+        scheduler.start()
+        return scheduler
+
+    def test_ai_disabled_accepts_transcript_without_calling_director(self) -> None:
+        scheduler = self._build_started_scheduler()
+        scheduler.set_ai_enabled(False)
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            should_quit = process_line(
+                "player_2: no way, I found diamonds",
+                transcript_router,
+                ai_director,
+                scheduler,
+            )
+
+        self.assertFalse(should_quit)
+        ai_director.decide.assert_not_called()
+        self.assertIn(
+            "player_2: no way, I found diamonds",
+            transcript_router.get_recent_context_text(),
+        )
+        self.assertIn(
+            "AI evaluation skipped because AI mode is off",
+            output.getvalue(),
+        )
+        self.assertNotIn("Asking AI director", output.getvalue())
+
+    def test_ai_enabled_process_line_calls_director_and_applies_decision(self) -> None:
+        scheduler = self._build_started_scheduler()
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        decision = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.9,
+            duration_seconds=12,
+            reason="Player 2 found diamonds.",
+        )
+        ai_director = Mock()
+        ai_director.decide.return_value = decision
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            should_quit = process_line(
+                "player_2: no way, I found diamonds",
+                transcript_router,
+                ai_director,
+                scheduler,
+            )
+
+        self.assertFalse(should_quit)
+        ai_director.decide.assert_called_once_with(
+            "player_2: no way, I found diamonds"
+        )
+        self.assertIn("Asking AI director", output.getvalue())
+        self.assertIn("AI decision: Player 2 Fullscreen", output.getvalue())
+        self.assertEqual(scheduler.status().current_scene, SCENES["player_2"])
 
 
 class DryRunSchedulerIntegrationTests(unittest.TestCase):

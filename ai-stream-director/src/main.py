@@ -160,6 +160,13 @@ def process_line(
         print("Could not parse line. Use format: player_1: transcript text")
         return False
 
+    if not scheduler.status().ai_enabled:
+        print(
+            f"Transcript accepted from {message.speaker}. "
+            "AI evaluation skipped because AI mode is off."
+        )
+        return False
+
     print(f"Transcript accepted from {message.speaker}. Asking AI director...")
     try:
         context = transcript_router.get_recent_context_text()

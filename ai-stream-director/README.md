@@ -133,7 +133,40 @@ SRT ingest. It uses `infra/srs.conf`, listens inside the Compose network on
 RTMP `1935/tcp`, HTTP API `1985/tcp`, HTTP stream output `8080/tcp`, and SRT
 `10080/udp`, and publishes stable streams under the `live` app.
 
-Start only the media server:
+For the first smoke test, install Docker or Docker Desktop and confirm the
+`docker` command is available on `PATH`. From `ai-stream-director/`:
+
+```powershell
+docker --version
+docker compose version
+docker compose up -d media-server
+```
+
+Before calling the SRS HTTP API, verify that the host API port is listening:
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 1985
+```
+
+The PowerShell check should report `TcpTestSucceeded : True`. On Linux, an
+equivalent listener check is:
+
+```bash
+ss -ltn '( sport = :1985 )'
+```
+
+Then call the SRS summaries endpoint from the host:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:1985/api/v1/summaries
+```
+
+If a browser, `Invoke-RestMethod`, or another client reports connection
+refused, SRS is not started, Docker is unavailable, or the host port is not
+listening. A response from `/api/v1/summaries` means the SRS HTTP API is
+reachable, even when no player streams are currently publishing.
+
+Start only the media server on later runs with the same Compose service:
 
 ```powershell
 docker compose up -d media-server
@@ -149,8 +182,11 @@ SRS_HTTP_STREAM_PORT=8080
 SRS_SRT_PORT=10080
 ```
 
-Set `SRS_BIND_ADDR=0.0.0.0` only when the machine's LAN firewall boundary is
-intentional. Player capture machines cannot reach a host-local
+For same-machine smoke tests, use localhost, preferably the explicit
+`127.0.0.1` URL shown above. If publishers or operators are on another machine,
+use the Linux server's LAN IP in publish and playback URLs. Set
+`SRS_BIND_ADDR=0.0.0.0` only when that LAN exposure and the machine's firewall
+boundary are intentional. Player capture machines cannot reach a host-local
 `127.0.0.1` binding from another computer.
 
 For OBS or vMix RTMP publishing, use this server/app shape and a per-player
@@ -473,22 +509,58 @@ player_2: no way, I found diamonds
 /status
 ```
 
-## Running Without Docker
+## Windows Local AI Dry Run
 
-If you already have Ollama running locally:
+This path runs the terminal MVP directly from Windows PowerShell with host-local
+Ollama and dry-run OBS. Docker, SRS, and OBS are not required for this AI loop.
+
+Use `http://127.0.0.1:11434` when `python src/main.py` runs directly on the
+Windows host. Use `http://ollama:11434` only for Docker Compose
+service-to-service traffic, where `ollama` is the Compose service DNS name.
+
+Install Ollama for Windows, start the Ollama app or service, and confirm the CLI
+can reach it:
+
+```powershell
+ollama --version
+ollama pull gemma3:4b
+```
+
+If the pull cannot connect, start Ollama and retry. One foreground option is to
+run `ollama serve` in a separate PowerShell window.
+
+From `ai-stream-director/`, create the Python environment and start the app:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ollama pull gemma3:4b
-$env:OBS_HOST="127.0.0.1"
-$env:OBS_PORT="4455"
-$env:OBS_PASSWORD="your-obs-websocket-password"
-$env:DRY_RUN_OBS="true" # optional: skip OBS WebSocket for local smoke testing
+$env:DRY_RUN_OBS="true"
+$env:GEMMA_MODEL="gemma3:4b"
 $env:GEMMA_API_URL="http://127.0.0.1:11434"
+$env:OLLAMA_MODEL="gemma3:4b"
+$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
 python src/main.py
 ```
+
+After the prompt appears, paste a short manual transcript and command path:
+
+```text
+/status
+player_1: I am walking through the forest
+player_3: no way, I just found something crazy
+/p2
+/quad
+/quit
+```
+
+Expected result: startup prints `DRY_RUN_OBS enabled` and
+`[DRY RUN OBS] Starting scene: Quad View`; `/status` prints the current scene
+and AI state; transcript lines are accepted and sent to host-local Ollama; a
+high-confidence AI decision may print `[DRY RUN OBS] Scene switch: Player 3
+Fullscreen`; manual `/p2` and `/quad` commands print deterministic dry-run
+scene-switch output.
 
 ## Next Steps
 
