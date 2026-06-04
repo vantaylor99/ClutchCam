@@ -110,10 +110,11 @@ Success criteria:
 - A trigger on `player_3` at `T` can switch output to media beginning roughly
   10-15 seconds before `T`.
 
-## Phase 5 - Visual And Multimodal Signals
+## Phase 5 - Optional Visual And Multimodal Signals
 
-Purpose: add visual confirmation and richer hype classification after the
-transcript path is stable.
+Purpose: optionally add visual confirmation and richer hype classification after
+the transcript path, lookback switching, and OBS buffered playback are stable.
+This is not part of the next local testing checkpoint.
 
 Deliverables:
 
@@ -126,6 +127,21 @@ Success criteria:
 
 - Visual analysis can confirm or reject ambiguous transcript hype without
   destabilizing the live switching path.
+
+## Next Checkpoint - Local Generated Stream Validation
+
+Purpose: before adding more product behavior, prove the local stack can be
+started and diagnosed with generated media and bounded smoke commands.
+
+Success criteria:
+
+- The Python unit suite remains green.
+- A single checkpoint runner can execute or skip each smoke boundary and produce
+  a structured report.
+- An opt-in Docker Compose checkpoint can publish a generated RTMP stream,
+  produce buffer segments in `/dev/shm`, and resolve a lookback clip.
+- AI and transcription endpoints fail with clear operator guidance when they are
+  not configured.
 
 ## Phase 6 - Production Operations
 
@@ -148,7 +164,9 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
+
+- `tickets/implement/33-local-checkpoint-smoke-runner.md`
 
 Active plan tickets: none.
 
@@ -190,8 +208,10 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/17-vision-keyframe-analysis.md`
 - `tickets/backlog/29-obs-buffered-media-source-adapter.md`
 - `tickets/backlog/30-runtime-event-pipeline-wiring.md`
 - `tickets/backlog/31-faster-whisper-compose-profile.md`
 - `tickets/backlog/32-runtime-healthcheck-entrypoints.md`
+- `tickets/backlog/34-compose-generated-ingest-checkpoint.md`
+- `tickets/backlog/35-local-ai-model-readiness-checkpoint.md`
+- `tickets/backlog/90-optional-vision-keyframe-analysis.md`
