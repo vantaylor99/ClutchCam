@@ -210,18 +210,80 @@ class SmokeAIEndpointTests(unittest.TestCase):
         )
 
         self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.endpoint_url, "http://ollama.test:11434")
+        self.assertEqual(result.probe_url, "http://ollama.test:11434/api/tags")
+        self.assertEqual(result.url, "http://ollama.test:11434/api/tags")
         self.assertEqual(result.available_models, ("gemma3:4b",))
+        self.assertEqual(result.detected_model_count, 1)
         self.assertEqual(calls[0][0], "http://ollama.test:11434/api/tags")
         self.assertEqual(calls[0][1]["timeout"], 2.0)
 
     def test_ollama_smoke_fails_with_pull_hint_for_missing_model(self) -> None:
-        with self.assertRaisesRegex(smoke_ai_endpoint.SmokeFailure, "ollama pull missing-model"):
+        with self.assertRaises(smoke_ai_endpoint.SmokeFailure) as raised:
             smoke_ai_endpoint.smoke_ai_endpoint(
-                {"AI_PROVIDER": "ollama", "GEMMA_MODEL": "missing-model"},
-                get=lambda *args, **kwargs: FakeResponse({"models": [{"name": "other"}]}),
+                {
+                    "AI_PROVIDER": "ollama",
+                    "GEMMA_API_URL": "http://ollama.test:11434",
+                    "GEMMA_MODEL": "missing-model",
+                },
+                get=lambda *args, **kwargs: FakeResponse(
+                    {"models": [{"name": "other"}, {"model": "smaller"}]}
+                ),
             )
 
-    def test_openai_compatible_smoke_uses_readiness_url_and_auth_header(self) -> None:
+        message = str(raised.exception)
+        self.assertIn("provider=ollama", message)
+        self.assertIn("endpoint=http://ollama.test:11434", message)
+        self.assertIn("model=missing-model", message)
+        self.assertIn("Detected models: other, smaller", message)
+        self.assertIn("Run: ollama pull missing-model", message)
+
+    def test_ollama_smoke_fails_on_malformed_model_list(self) -> None:
+        with self.assertRaises(smoke_ai_endpoint.SmokeFailure) as raised:
+            smoke_ai_endpoint.smoke_ai_endpoint(
+                {
+                    "AI_PROVIDER": "ollama",
+                    "GEMMA_API_URL": "http://ollama.test:11434",
+                    "GEMMA_MODEL": "gemma3:4b",
+                },
+                get=lambda *args, **kwargs: FakeResponse(
+                    {"models": [{"digest": "abc123"}, "gemma3:4b"]}
+                ),
+            )
+
+        message = str(raised.exception)
+        self.assertIn("provider=ollama", message)
+        self.assertIn("endpoint=http://ollama.test:11434", message)
+        self.assertIn("model=gemma3:4b", message)
+        self.assertIn("model list did not contain any parseable model names", message)
+
+    def test_openai_compatible_smoke_checks_provider_reachability(self) -> None:
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse({"ok": True})
+
+        result = smoke_ai_endpoint.smoke_ai_endpoint(
+            {
+                "AI_PROVIDER": "openai-compatible",
+                "GEMMA_API_URL": "https://llm.example.test/v1/chat/completions",
+                "GEMMA_MODEL": "google/gemma-3-4b-it",
+            },
+            get=get,
+        )
+
+        self.assertEqual(result.provider, "openai-compatible")
+        self.assertEqual(result.endpoint_url, "https://llm.example.test/v1/chat/completions")
+        self.assertEqual(result.probe_url, "https://llm.example.test")
+        self.assertEqual(result.url, "https://llm.example.test")
+        self.assertEqual(result.model, "google/gemma-3-4b-it")
+        self.assertFalse(result.api_key_configured)
+        self.assertIsNone(result.detected_model_count)
+        self.assertEqual(calls[0][0], "https://llm.example.test")
+        self.assertEqual(calls[0][1]["headers"], {})
+
+    def test_openai_compatible_smoke_sends_auth_header_when_key_is_set(self) -> None:
         calls = []
 
         def get(url, **kwargs):
@@ -240,6 +302,7 @@ class SmokeAIEndpointTests(unittest.TestCase):
 
         self.assertEqual(result.provider, "openai-compatible")
         self.assertEqual(result.url, "https://llm.example.test")
+        self.assertTrue(result.api_key_configured)
         self.assertEqual(calls[0][0], "https://llm.example.test")
         self.assertEqual(calls[0][1]["headers"], {"Authorization": "Bearer secret"})
 

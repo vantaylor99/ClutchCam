@@ -32,8 +32,13 @@ $env:DRY_RUN_OBS="true"
 $env:AI_PROVIDER="ollama"
 $env:GEMMA_API_URL="http://127.0.0.1:11434"
 $env:GEMMA_MODEL="gemma3:4b"
+python scripts/smoke_ai_endpoint.py
 python src/main.py
 ```
+
+The AI smoke output should name the configured provider, endpoint, probe URL,
+model, detected Ollama models, and model count. If `GEMMA_MODEL` is missing,
+the failure includes the exact `ollama pull <model>` command to run.
 
 For a fully bounded dry-run that does not need a real AI endpoint:
 
@@ -103,6 +108,10 @@ $env:GEMMA_MODEL="gemma3:4b"
 python scripts/smoke_ai_endpoint.py
 ```
 
+Expected result: JSON with `provider=ollama`, the configured `endpoint_url`,
+the `/api/tags` `probe_url`, the configured `model`, `available_models`, and
+`detected_model_count`.
+
 AI endpoint smoke, OpenAI-compatible provider:
 
 ```powershell
@@ -112,6 +121,15 @@ $env:GEMMA_MODEL="google/gemma-3-4b-it"
 $env:GEMMA_API_KEY="<token>"
 python scripts/smoke_ai_endpoint.py
 ```
+
+Expected result: JSON with the configured `endpoint_url`, provider-neutral
+reachability `probe_url`, configured `model`, and `api_key_configured`. The
+smoke sends `Authorization: Bearer <token>` only when `GEMMA_API_KEY` is set.
+
+Optional future model note: later vision/keyframe analysis can use a
+text/image-capable Gemma model tag when the selected provider supports it. This
+terminal checkpoint remains a text transcript and scene-switch loop; changing
+`GEMMA_MODEL` alone does not make visual analysis a near-term requirement.
 
 Orchestrator dry-run smoke:
 
@@ -127,7 +145,7 @@ AI endpoint unavailable:
   `smoke_ai_endpoint.py` exits non-zero.
 - Recover: start Ollama or the remote OpenAI-compatible server, check
   `GEMMA_API_URL`, check `GEMMA_MODEL`, and for Ollama run
-  `ollama pull <model>`.
+  the exact `ollama pull <model>` command printed by the smoke failure.
 - During an event, use `/ai off` and manual commands such as `/p1` and `/quad`
   until the endpoint is healthy.
 

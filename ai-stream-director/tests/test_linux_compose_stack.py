@@ -58,6 +58,27 @@ class LinuxComposeStackTests(unittest.TestCase):
             service_block("orchestrator"),
         )
 
+    def test_runtime_services_define_bounded_healthchecks(self) -> None:
+        media_server = service_block("media-server")
+        buffer_worker = service_block("buffer-worker")
+        transcription_worker = service_block("transcription-worker")
+        orchestrator = service_block("orchestrator")
+
+        self.assertIn("healthcheck:", media_server)
+        self.assertIn("http://127.0.0.1:1985/api/v1/summaries", media_server)
+        self.assertIn(
+            'test: ["CMD", "python", "-m", "buffer_worker", "--healthcheck"]',
+            buffer_worker,
+        )
+        self.assertIn(
+            'test: ["CMD", "python", "-m", "transcription_worker", "--healthcheck"]',
+            transcription_worker,
+        )
+        self.assertIn(
+            'test: ["CMD", "python", "src/main.py", "--healthcheck"]',
+            orchestrator,
+        )
+
     def test_workers_default_to_compose_media_dns_and_not_local_ai(self) -> None:
         buffer_worker = service_block("buffer-worker")
         transcription_worker = service_block("transcription-worker")

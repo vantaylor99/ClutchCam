@@ -187,6 +187,28 @@ to a buffered clip. The OBS buffered media-source adapter is still future work.
 
 Run these from `ai-stream-director/`.
 
+One-command checkpoint runner:
+
+```bash
+python scripts/checkpoint_smoke_runner.py
+```
+
+By default the runner emits structured JSON, skips live media-server, buffer,
+transcription, and AI checks, and runs only the bounded orchestrator dry-run.
+Each check reports `passed`, `failed`, or `skipped`, its duration, command
+context, result payload, and failure reason. Opt into heavier boundaries with
+per-check flags, or run the full local checkpoint when the required services are
+ready:
+
+```bash
+python scripts/checkpoint_smoke_runner.py --run-media-server --run-buffer
+python scripts/checkpoint_smoke_runner.py --run-all
+```
+
+Environment equivalents use `CHECKPOINT_SMOKE_RUN_<CHECK>=true` or
+`CHECKPOINT_SMOKE_SKIP_<CHECK>=true`, with check names such as `MEDIA_SERVER`,
+`BUFFER`, `TRANSCRIPTION`, `AI`, and `ORCHESTRATOR`.
+
 Media-server readiness and generated publish:
 
 ```bash

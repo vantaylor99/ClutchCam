@@ -143,6 +143,11 @@ Success criteria:
 - AI and transcription endpoints fail with clear operator guidance when they are
   not configured.
 
+Current status: the checkpoint runner, runtime healthcheck entrypoints, and AI
+readiness diagnostics are implemented. The remaining checkpoint gap is the
+opt-in generated-ingest Compose validation that proves SRS, FFmpeg, and the
+lookback resolver together on a local Linux host.
+
 ## Phase 6 - Production Operations
 
 Purpose: make the local-first stack observable, restartable, and deployable.
@@ -150,7 +155,7 @@ Purpose: make the local-first stack observable, restartable, and deployable.
 Deliverables:
 
 - Docker Compose profile for local Linux hardware.
-- Health checks for media server, buffer, transcription, AI, and switcher.
+- Health checks for media server, buffer, transcription, AI, and orchestrator.
 - Structured logs and event trace IDs.
 - Sample media integration tests.
 - Operator runbooks for OBS scene setup and failure recovery.
@@ -164,11 +169,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/32-runtime-healthcheck-entrypoints.md`
-- `tickets/implement/33-local-checkpoint-smoke-runner.md`
-- `tickets/implement/35-local-ai-model-readiness-checkpoint.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -207,6 +208,9 @@ Completed review tickets:
 - `tickets/complete/26-local-linux-compose-profiles.md`
 - `tickets/complete/27-local-stack-smoke-entrypoints.md`
 - `tickets/complete/28-health-check-primitives.md`
+- `tickets/complete/32-runtime-healthcheck-entrypoints.md`
+- `tickets/complete/33-local-checkpoint-smoke-runner.md`
+- `tickets/complete/35-local-ai-model-readiness-checkpoint.md`
 
 Backlog tickets:
 

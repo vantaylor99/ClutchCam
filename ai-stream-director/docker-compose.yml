@@ -11,6 +11,12 @@ services:
       - "${SRS_BIND_ADDR:-127.0.0.1}:${SRS_SRT_PORT:-10080}:10080/udp"
     volumes:
       - ./infra/srs.conf:/usr/local/srs/conf/clutchcam.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1985/api/v1/summaries >/dev/null || wget -q -O - http://127.0.0.1:1985/api/v1/summaries >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   buffer-worker:
     profiles: ["buffer-worker", "local-linux"]
@@ -33,6 +39,12 @@ services:
         source: ${LOOKBACK_BUFFER_HOST_DIR:-/dev/shm/clutchcam}
         target: /dev/shm/clutchcam
     command: ["python", "-m", "buffer_worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "buffer_worker", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   transcription-worker:
@@ -60,6 +72,12 @@ services:
         source: ${AUDIO_EXTRACT_HOST_DIR:-/dev/shm/clutchcam-audio}
         target: /dev/shm/clutchcam-audio
     command: ["python", "-m", "transcription_worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "transcription_worker", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   orchestrator:
@@ -98,6 +116,12 @@ services:
         source: ${AUDIO_EXTRACT_HOST_DIR:-/dev/shm/clutchcam-audio}
         target: /dev/shm/clutchcam-audio
     command: ["python", "src/main.py"]
+    healthcheck:
+      test: ["CMD", "python", "src/main.py", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     stdin_open: true
     tty: true
 

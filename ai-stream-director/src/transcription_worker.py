@@ -21,6 +21,7 @@ from services.transcription import (
     FasterWhisperTranscriber,
     Transcriber,
 )
+from services.health import run_runtime_healthcheck
 from services.transcription_runtime import (
     TranscriptEventSink,
     TranscriptionRuntimeFailure,
@@ -263,7 +264,16 @@ def build_worker(
     )
 
 
-def main() -> int:
+def main(argv: tuple[str, ...] | list[str] | None = None) -> int:
+    args = tuple(sys.argv[1:] if argv is None else argv)
+    if args == ("--healthcheck",):
+        return run_runtime_healthcheck("transcription-worker")
+    if args:
+        JsonLinesTranscriptSink().write_worker_error(
+            ValueError("Unknown transcription worker arguments: " + " ".join(args))
+        )
+        return 2
+
     jsonl_sink = JsonLinesTranscriptSink()
     try:
         with SignalStopController() as stop_controller:

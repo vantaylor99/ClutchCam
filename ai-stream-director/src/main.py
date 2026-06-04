@@ -2,7 +2,7 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import TextIO
 
 from ai_director import AIDirector, AIDirectorError
@@ -14,6 +14,7 @@ from services.ai import (
     TranscriptTriggerPrefilter,
     TranscriptTriggerPrefilterConfig,
 )
+from services.health import run_runtime_healthcheck
 from transcript_router import TranscriptRouter
 
 
@@ -59,7 +60,14 @@ class TerminalOutput:
             self.stream.flush()
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    args = tuple(sys.argv[1:] if argv is None else argv)
+    if args == ("--healthcheck",):
+        return run_runtime_healthcheck("orchestrator")
+    if args:
+        print("Unknown orchestrator arguments: " + " ".join(args))
+        return 2
+
     config = get_config()
     terminal_output = TerminalOutput()
 

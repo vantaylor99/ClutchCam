@@ -142,6 +142,12 @@ OLLAMA_BASE_URL=http://ollama:11434
 
 `GEMMA_*` names are preferred for the production architecture. `OLLAMA_*` names remain compatibility aliases for the current MVP. You can replace the model with another small local Gemma-compatible model if needed.
 
+For local readiness checkpoints, keep the default text-only loop until a future
+vision/keyframe ticket opts in to multimodal analysis. Optional later Ollama
+Gemma model tags can be used when they are installed locally and supported by
+the selected provider, but changing `GEMMA_MODEL` alone does not make visual
+analysis part of the near-term checkpoint.
+
 ## Local Media Server
 
 Docker Compose includes a local SRS service named `media-server` for RTMP and
@@ -455,6 +461,11 @@ GEMMA_MODEL=gemma3:4b \
 python scripts/smoke_ai_endpoint.py
 ```
 
+Expected result: JSON with `provider`, `endpoint_url`, `probe_url`, `model`,
+`timeout_seconds`, `available_models`, and `detected_model_count`. If the
+configured Ollama model is missing, the failure includes the detected models and
+the exact recovery command, such as `ollama pull gemma3:4b`.
+
 For an OpenAI-compatible server, the smoke checks reachability and sends an
 authorization header when `GEMMA_API_KEY` is set:
 
@@ -464,6 +475,11 @@ GEMMA_API_URL=https://gemma-gpu.example.internal/v1/chat/completions \
 GEMMA_MODEL=google/gemma-3-4b-it \
 python scripts/smoke_ai_endpoint.py
 ```
+
+Expected result: JSON with the configured `endpoint_url`, the provider-neutral
+reachability `probe_url`, the configured `model`, and `api_key_configured`.
+The smoke does not require a provider-specific model-list endpoint for this
+mode.
 
 Smoke the terminal orchestrator without OBS, Ollama, or cloud credentials:
 
@@ -556,6 +572,8 @@ ollama pull gemma3:4b
 ```
 
 Replace `gemma3:4b` with your `GEMMA_MODEL` value if you changed it.
+The AI endpoint smoke prints the same exact `ollama pull <model>` command and
+the detected local model tags to make this checkpoint easier to diagnose.
 
 If a transcript line prints `AI decision failed`, Ollama responded but did not produce a usable final decision object. Try the line again, use a lower-temperature model, or switch to a model that follows JSON instructions more reliably.
 
@@ -654,6 +672,7 @@ $env:GEMMA_MODEL="gemma3:4b"
 $env:GEMMA_API_URL="http://127.0.0.1:11434"
 $env:OLLAMA_MODEL="gemma3:4b"
 $env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
+python scripts/smoke_ai_endpoint.py
 python src/main.py
 ```
 

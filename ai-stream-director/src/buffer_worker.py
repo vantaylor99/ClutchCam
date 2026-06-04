@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import signal
+import sys
 import threading
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager, nullcontext
@@ -18,6 +19,7 @@ from services.buffer import (
     LookbackBufferError,
     RollingBufferConfig,
 )
+from services.health import run_runtime_healthcheck
 
 
 LOGGER = logging.getLogger(__name__)
@@ -123,8 +125,14 @@ def run_buffer_worker(
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint."""
 
-    del argv
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    args = tuple(sys.argv[1:] if argv is None else argv)
+    if args == ("--healthcheck",):
+        return run_runtime_healthcheck("buffer-worker")
+    if args:
+        LOGGER.error("Unknown buffer worker arguments: %s", " ".join(args))
+        return 2
+
     try:
         return run_buffer_worker()
     except (BufferWorkerError, LookbackBufferError, OSError, ValueError) as exc:
