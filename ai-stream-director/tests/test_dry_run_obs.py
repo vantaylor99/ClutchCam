@@ -1,4 +1,6 @@
+import builtins
 import io
+import importlib
 import os
 import sys
 import time
@@ -86,6 +88,44 @@ class DryRunOBSConfigTests(unittest.TestCase):
 
 
 class DryRunOBSControllerTests(unittest.TestCase):
+    def test_dry_run_imports_and_runs_without_obsws_python(self) -> None:
+        original_import = builtins.__import__
+
+        def reject_obsws_python(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "obsws_python" or name.startswith("obsws_python."):
+                raise ModuleNotFoundError(
+                    "No module named 'obsws_python'",
+                    name="obsws_python",
+                )
+            return original_import(name, globals, locals, fromlist, level)
+
+        saved_modules = {
+            name: sys.modules.get(name)
+            for name in ("main", "obs_controller", "obsws_python")
+        }
+        for name in saved_modules:
+            sys.modules.pop(name, None)
+
+        try:
+            with patch("builtins.__import__", side_effect=reject_obsws_python):
+                obs_controller = importlib.import_module("obs_controller")
+                main = importlib.import_module("main")
+                controller = obs_controller.DryRunOBSController(
+                    initial_scene=SCENES["quad"]
+                )
+
+                controller.connect()
+                controller.set_scene(SCENES["player_2"])
+
+                self.assertEqual(controller.get_current_scene(), SCENES["player_2"])
+                self.assertTrue(hasattr(main, "main"))
+        finally:
+            for name in saved_modules:
+                sys.modules.pop(name, None)
+            for name, module in saved_modules.items():
+                if module is not None:
+                    sys.modules[name] = module
+
     def test_requires_connect_before_use(self) -> None:
         controller = DryRunOBSController(initial_scene=SCENES["quad"])
 
@@ -106,6 +146,23 @@ class DryRunOBSControllerTests(unittest.TestCase):
 
 
 class OBSControllerSceneListTests(unittest.TestCase):
+    def test_connect_explains_missing_obsws_python_in_real_mode(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+
+        missing_obsws_python = ModuleNotFoundError(
+            "No module named 'obsws_python'",
+            name="obsws_python",
+        )
+        with patch(
+            "obs_controller.importlib.import_module",
+            side_effect=missing_obsws_python,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "obsws-python is required.*DRY_RUN_OBS=true",
+            ):
+                controller.connect()
+
     def test_list_scenes_reads_scene_names_from_obs_response(self) -> None:
         controller = OBSController(host="localhost", port=4455, password="")
         response = Mock()

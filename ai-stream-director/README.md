@@ -113,7 +113,7 @@ To test without OBS, enable dry-run mode:
 DRY_RUN_OBS=true
 ```
 
-Dry-run mode skips the OBS WebSocket connection and prints scene switches to the terminal instead.
+Dry-run mode skips the OBS WebSocket connection and prints scene switches to the terminal instead. It does not import or require `obsws-python`; real OBS mode requires that dependency and fails clearly if it is missing.
 
 The default Ollama model is:
 

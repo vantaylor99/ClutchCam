@@ -1,6 +1,5 @@
-from typing import Optional
-
-import obsws_python as obs
+import importlib
+from typing import Any, Optional
 
 
 class OBSController:
@@ -8,9 +7,10 @@ class OBSController:
         self.host = host
         self.port = port
         self.password = password
-        self.client: Optional[obs.ReqClient] = None
+        self.client: Optional[Any] = None
 
     def connect(self) -> None:
+        obs = _load_obs_module()
         self.client = obs.ReqClient(
             host=self.host,
             port=self.port,
@@ -32,10 +32,23 @@ class OBSController:
         result = self._require_client().get_current_program_scene()
         return result.current_program_scene_name
 
-    def _require_client(self) -> obs.ReqClient:
+    def _require_client(self) -> Any:
         if self.client is None:
             raise RuntimeError("OBS client is not connected.")
         return self.client
+
+
+def _load_obs_module() -> Any:
+    try:
+        return importlib.import_module("obsws_python")
+    except ModuleNotFoundError as exc:
+        if exc.name == "obsws_python":
+            raise RuntimeError(
+                "obsws-python is required for real OBS mode. "
+                "Install ai-stream-director requirements, or set "
+                "DRY_RUN_OBS=true to run without OBS WebSocket."
+            ) from exc
+        raise
 
 
 def _scene_name(scene) -> str:
