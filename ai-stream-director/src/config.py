@@ -44,6 +44,11 @@ class AppConfig:
     max_focus_duration_seconds: int
     transcript_history_seconds: int
     transcript_history_messages: int
+    transcript_prefilter_enabled: bool
+    transcript_prefilter_min_text_characters: int
+    transcript_prefilter_duplicate_window_seconds: float
+    transcript_prefilter_context_seconds: float
+    transcript_prefilter_min_confidence: float
     default_scene: str
 
     @property
@@ -104,6 +109,21 @@ def get_config() -> AppConfig:
         max_focus_duration_seconds=int(os.getenv("MAX_FOCUS_DURATION_SECONDS", "20")),
         transcript_history_seconds=int(os.getenv("TRANSCRIPT_HISTORY_SECONDS", "30")),
         transcript_history_messages=int(os.getenv("TRANSCRIPT_HISTORY_MESSAGES", "20")),
+        transcript_prefilter_enabled=_parse_bool(
+            os.getenv("TRANSCRIPT_PREFILTER_ENABLED", "true")
+        ),
+        transcript_prefilter_min_text_characters=int(
+            os.getenv("TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS", "6")
+        ),
+        transcript_prefilter_duplicate_window_seconds=float(
+            os.getenv("TRANSCRIPT_PREFILTER_DUPLICATE_WINDOW_SECONDS", "12")
+        ),
+        transcript_prefilter_context_seconds=float(
+            os.getenv("TRANSCRIPT_PREFILTER_CONTEXT_SECONDS", "30")
+        ),
+        transcript_prefilter_min_confidence=float(
+            os.getenv("TRANSCRIPT_PREFILTER_MIN_CONFIDENCE", "0.70")
+        ),
         default_scene=SCENES["quad"],
     )
 

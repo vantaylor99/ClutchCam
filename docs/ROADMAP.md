@@ -149,7 +149,11 @@ Active review tickets: none.
 
 Active implement tickets:
 
-- `tickets/implement/21-transcript-trigger-prefilter.md`
+- `tickets/implement/23-structured-event-logging.md`
+- `tickets/implement/24-buffer-worker-runtime-entrypoint.md`
+- `tickets/implement/25-transcription-worker-runtime-entrypoint.md`
+- `tickets/implement/26-local-linux-compose-profiles.md`
+- `tickets/implement/27-local-stack-smoke-entrypoints.md`
 
 Active plan tickets: none.
 
@@ -172,6 +176,8 @@ Completed review tickets:
 - `tickets/complete/20-terminal-prompt-log-interleaving.md`
 - `tickets/complete/20-local-srs-dev-quickstart.md`
 - `tickets/complete/21-dry-run-obs-without-obs-dependency.md`
+- `tickets/complete/21-transcript-trigger-prefilter.md`
+- `tickets/complete/22-transcription-runtime-pump.md`
 - `tickets/complete/22-python-bytecode-artifacts-dirty-worktree.md`
 
 Backlog tickets:

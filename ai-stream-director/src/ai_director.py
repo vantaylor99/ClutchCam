@@ -6,6 +6,7 @@ from typing import Any, Dict
 import requests
 
 from config import SCENES, VALID_SCENE_NAMES
+from contracts import HypeSignal
 
 
 @dataclass
@@ -70,8 +71,15 @@ class AIDirector:
                 f'Run: ollama pull {self.model}'
             )
 
-    def decide(self, transcript_context: str) -> DirectorDecision:
-        prompt = self._build_prompt(transcript_context)
+    def decide(
+        self,
+        transcript_context: str,
+        candidate_signal: HypeSignal | None = None,
+    ) -> DirectorDecision:
+        prompt = self._build_prompt(
+            transcript_context,
+            candidate_signal=candidate_signal,
+        )
         try:
             response = requests.post(
                 f"{self.ollama_base_url}/api/generate",
@@ -106,8 +114,13 @@ class AIDirector:
         data = self._parse_decision_json(raw_decision)
         return self._normalize_decision(data)
 
-    def _build_prompt(self, transcript_context: str) -> str:
+    def _build_prompt(
+        self,
+        transcript_context: str,
+        candidate_signal: HypeSignal | None = None,
+    ) -> str:
         scene_list = "\n".join(f"- {scene}" for scene in SCENES.values())
+        candidate_context = _candidate_context(candidate_signal)
         return f"""
 You are an AI livestream director controlling OBS scenes for a 4-player stream.
 
@@ -126,6 +139,11 @@ Decision rules:
 - Player focus duration should usually be 8-15 seconds.
 - Never choose a duration above 20 seconds.
 - Keep reasons short and concrete.
+- The candidate trigger is the newest local signal. Treat older transcript lines
+  as supporting context, not as replacement triggers.
+
+Candidate trigger:
+{candidate_context}
 
 Recent transcript:
 {transcript_context}
@@ -209,3 +227,18 @@ Return exactly this JSON shape:
             duration_seconds=duration_seconds,
             reason=reason,
         )
+
+
+def _candidate_context(candidate_signal: HypeSignal | None) -> str:
+    if candidate_signal is None:
+        return "No local trigger candidate."
+
+    return "\n".join(
+        [
+            f"stream_id: {candidate_signal.stream_id}",
+            f"trigger_time_seconds: {candidate_signal.trigger_time_seconds:.3f}",
+            f"local_confidence: {candidate_signal.confidence:.2f}",
+            f"local_reason: {candidate_signal.reason}",
+            f"source: {candidate_signal.source}",
+        ]
+    )

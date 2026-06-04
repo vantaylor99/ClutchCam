@@ -15,7 +15,11 @@ from contracts import (  # noqa: E402
     SwitcherTarget,
     TranscriptEvent,
 )
-from services.ai import HypeContext  # noqa: E402
+from services.ai import (  # noqa: E402
+    HypeContext,
+    TranscriptTriggerPrefilter,
+    TranscriptTriggerPrefilterConfig,
+)
 from services.buffer import ClipResolution, ClipResolutionStatus  # noqa: E402
 from services.ingestion import (  # noqa: E402
     StaticStreamSourceProvider,
@@ -136,6 +140,61 @@ class AIBoundaryTests(unittest.TestCase):
 
         self.assertEqual(signal.stream_id, "player_4")
         self.assertEqual(signal.source, "transcript")
+
+    def test_transcript_prefilter_accepts_clear_hype_phrase(self) -> None:
+        event = TranscriptEvent(
+            stream_id="player_2",
+            text="holy cow, look at this",
+            start_time_seconds=11.0,
+            end_time_seconds=12.0,
+        )
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(event,))
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.stream_id, "player_2")
+        self.assertEqual(signal.trigger_time_seconds, 12.0)
+        self.assertGreaterEqual(signal.confidence, 0.7)
+        self.assertEqual(signal.source, "transcript")
+        self.assertIn("excitement phrase", signal.reason)
+
+    def test_transcript_prefilter_rejects_filler_and_short_noise(self) -> None:
+        classifier = TranscriptTriggerPrefilter()
+        filler = TranscriptEvent("player_1", "yeah", 1.0, 1.5)
+        noise = TranscriptEvent("player_1", "!!!", 2.0, 2.5)
+
+        self.assertIsNone(classifier.classify(HypeContext(transcripts=(filler,))))
+        self.assertIsNone(classifier.classify(HypeContext(transcripts=(noise,))))
+
+    def test_transcript_prefilter_rejects_recent_duplicates_across_streams(self) -> None:
+        previous = TranscriptEvent("player_1", "holy cow, this is huge", 10.0, 11.0)
+        newest = TranscriptEvent("player_3", "Holy cow, look here", 12.0, 13.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(previous, newest))
+        )
+
+        self.assertIsNone(signal)
+
+    def test_transcript_prefilter_uses_reference_time_for_candidate(self) -> None:
+        event = TranscriptEvent("player_4", "no way, rare drop", 10.0, 12.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(event,), reference_time_seconds=99.0)
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.trigger_time_seconds, 99.0)
+
+    def test_transcript_prefilter_can_be_disabled_by_config(self) -> None:
+        event = TranscriptEvent("player_4", "no way, rare drop", 10.0, 12.0)
+        classifier = TranscriptTriggerPrefilter(
+            TranscriptTriggerPrefilterConfig(enabled=False)
+        )
+
+        self.assertIsNone(classifier.classify(HypeContext(transcripts=(event,))))
 
 
 class SwitcherBoundaryTests(unittest.TestCase):

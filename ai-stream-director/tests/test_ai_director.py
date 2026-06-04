@@ -9,6 +9,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from ai_director import AIDirector, AIDirectorError  # noqa: E402
 from config import SCENES  # noqa: E402
+from contracts import HypeSignal  # noqa: E402
 
 
 class AIDirectorReadinessTests(unittest.TestCase):
@@ -50,6 +51,25 @@ class AIDirectorDecisionTests(unittest.TestCase):
         with patch("ai_director.requests.post", return_value=response):
             with self.assertRaisesRegex(AIDirectorError, "did not include a decision"):
                 AIDirector("http://ollama:11434", "gemma3:4b").decide("player_1: hi")
+
+    def test_prompt_includes_candidate_separately_from_recent_context(self) -> None:
+        signal = HypeSignal(
+            stream_id="player_3",
+            trigger_time_seconds=42.25,
+            confidence=0.9,
+            reason="Matched excitement phrase: no way.",
+        )
+
+        prompt = AIDirector("http://ollama:11434", "gemma3:4b")._build_prompt(
+            "player_1: older context",
+            candidate_signal=signal,
+        )
+
+        self.assertIn("Candidate trigger:", prompt)
+        self.assertIn("stream_id: player_3", prompt)
+        self.assertIn("trigger_time_seconds: 42.250", prompt)
+        self.assertIn("local_reason: Matched excitement phrase: no way.", prompt)
+        self.assertIn("Recent transcript:\nplayer_1: older context", prompt)
 
 
 class AIDirectorParsingTests(unittest.TestCase):

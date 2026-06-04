@@ -14,6 +14,13 @@ class SchedulerStatus:
     last_switch_time: float
 
 
+@dataclass
+class AIEvaluationGate:
+    allowed: bool
+    reason: str = ""
+    cooldown_remaining_seconds: float = 0.0
+
+
 class SceneScheduler:
     def __init__(
         self,
@@ -90,6 +97,23 @@ class SceneScheduler:
         self.ai_enabled = enabled
         state = "on" if enabled else "off"
         self._log(f"AI mode is now {state}.")
+
+    def ai_evaluation_gate(self) -> AIEvaluationGate:
+        if not self.ai_enabled:
+            return AIEvaluationGate(
+                allowed=False,
+                reason="AI mode is off.",
+            )
+
+        remaining = self._cooldown_remaining()
+        if remaining > 0:
+            return AIEvaluationGate(
+                allowed=False,
+                reason="Switch cooldown is active.",
+                cooldown_remaining_seconds=remaining,
+            )
+
+        return AIEvaluationGate(allowed=True)
 
     def status(self) -> SchedulerStatus:
         return SchedulerStatus(

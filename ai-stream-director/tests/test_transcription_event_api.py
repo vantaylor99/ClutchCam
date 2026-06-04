@@ -185,6 +185,11 @@ class TranscriptRouterEventTests(unittest.TestCase):
             router.get_recent_context_text(),
             "player_4: found the boss room",
         )
+        recent_events = router.get_recent_events()
+        self.assertEqual(len(recent_events), 1)
+        self.assertEqual(recent_events[0].stream_id, "player_4")
+        self.assertEqual(recent_events[0].text, "found the boss room")
+        self.assertEqual(recent_events[0].end_time_seconds, 12.0)
 
     def test_add_event_rejects_unknown_streams(self) -> None:
         router = TranscriptRouter()

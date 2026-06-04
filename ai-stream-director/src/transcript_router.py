@@ -76,6 +76,9 @@ class TranscriptRouter:
         self._trim_history()
         return list(self._messages)
 
+    def get_recent_events(self) -> tuple[TranscriptEvent, ...]:
+        return tuple(message.to_event() for message in self.get_recent_messages())
+
     def get_recent_context_text(self) -> str:
         messages = self.get_recent_messages()
         if not messages:

@@ -7,7 +7,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -49,6 +49,26 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.gemma_model, "gemma4:e4b")
         self.assertEqual(config.ollama_base_url, "http://gemma:8000")
         self.assertEqual(config.ollama_model, "gemma4:e4b")
+
+    def test_transcript_prefilter_runtime_settings_are_configurable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_PREFILTER_ENABLED": "false",
+                "TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS": "9",
+                "TRANSCRIPT_PREFILTER_DUPLICATE_WINDOW_SECONDS": "4.5",
+                "TRANSCRIPT_PREFILTER_CONTEXT_SECONDS": "18",
+                "TRANSCRIPT_PREFILTER_MIN_CONFIDENCE": "0.82",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertFalse(config.transcript_prefilter_enabled)
+        self.assertEqual(config.transcript_prefilter_min_text_characters, 9)
+        self.assertEqual(config.transcript_prefilter_duplicate_window_seconds, 4.5)
+        self.assertEqual(config.transcript_prefilter_context_seconds, 18.0)
+        self.assertEqual(config.transcript_prefilter_min_confidence, 0.82)
 
     def test_production_boundary_defaults_are_available(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -293,11 +313,65 @@ class TerminalProcessLineAITests(unittest.TestCase):
 
         self.assertFalse(should_quit)
         ai_director.decide.assert_called_once_with(
-            "player_2: no way, I found diamonds"
+            "player_2: no way, I found diamonds",
+            candidate_signal=ANY,
         )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(candidate_signal.stream_id, "player_2")
         self.assertIn("Asking AI director", output.getvalue())
         self.assertIn("AI decision: Player 2 Fullscreen", output.getvalue())
         self.assertEqual(scheduler.status().current_scene, SCENES["player_2"])
+
+    def test_prefilter_skips_filler_without_calling_director(self) -> None:
+        scheduler = self._build_started_scheduler()
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            should_quit = process_line(
+                "player_1: yeah",
+                transcript_router,
+                ai_director,
+                scheduler,
+            )
+
+        self.assertFalse(should_quit)
+        ai_director.decide.assert_not_called()
+        self.assertIn("player_1: yeah", transcript_router.get_recent_context_text())
+        self.assertIn("Local prefilter found no trigger", output.getvalue())
+
+    def test_active_cooldown_skips_model_call_after_accepting_transcript(self) -> None:
+        controller = DryRunOBSController(initial_scene=SCENES["quad"])
+        scheduler = SceneScheduler(
+            obs_controller=controller,
+            default_scene=SCENES["quad"],
+            confidence_threshold=0.75,
+            min_switch_interval_seconds=8,
+            max_focus_duration_seconds=20,
+        )
+        controller.connect()
+        scheduler.start()
+        scheduler.last_switch_time = time.time()
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            should_quit = process_line(
+                "player_4: holy cow, rare boss",
+                transcript_router,
+                ai_director,
+                scheduler,
+            )
+
+        self.assertFalse(should_quit)
+        ai_director.decide.assert_not_called()
+        self.assertIn(
+            "player_4: holy cow, rare boss",
+            transcript_router.get_recent_context_text(),
+        )
+        self.assertIn("switch cooldown has", output.getvalue())
 
 
 class DryRunSchedulerIntegrationTests(unittest.TestCase):

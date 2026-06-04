@@ -9,6 +9,11 @@ from ai_director import AIDirector, AIDirectorError
 from config import SCENES, get_config
 from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
+from services.ai import (
+    HypeContext,
+    TranscriptTriggerPrefilter,
+    TranscriptTriggerPrefilterConfig,
+)
 from transcript_router import TranscriptRouter
 
 
@@ -73,6 +78,17 @@ def main() -> int:
     ai_director = AIDirector(
         ollama_base_url=config.gemma_api_url,
         model=config.gemma_model,
+    )
+    trigger_prefilter = TranscriptTriggerPrefilter(
+        TranscriptTriggerPrefilterConfig(
+            enabled=config.transcript_prefilter_enabled,
+            min_text_characters=config.transcript_prefilter_min_text_characters,
+            duplicate_window_seconds=(
+                config.transcript_prefilter_duplicate_window_seconds
+            ),
+            context_window_seconds=config.transcript_prefilter_context_seconds,
+            min_confidence=config.transcript_prefilter_min_confidence,
+        )
     )
     transcript_router = TranscriptRouter(
         history_seconds=config.transcript_history_seconds,
@@ -148,6 +164,7 @@ def main() -> int:
                 transcript_router,
                 ai_director,
                 scheduler,
+                trigger_prefilter=trigger_prefilter,
                 log=terminal_output.log,
             ):
                 return 0
@@ -183,6 +200,7 @@ def process_line(
     transcript_router: TranscriptRouter,
     ai_director: AIDirector,
     scheduler: SceneScheduler,
+    trigger_prefilter: TranscriptTriggerPrefilter | None = None,
     log=print,
 ) -> bool:
     if not line:
@@ -196,23 +214,75 @@ def process_line(
         log("Could not parse line. Use format: player_1: transcript text")
         return False
 
+    evaluate_accepted_transcript(
+        message=message,
+        transcript_router=transcript_router,
+        ai_director=ai_director,
+        scheduler=scheduler,
+        trigger_prefilter=trigger_prefilter,
+        log=log,
+    )
+    return False
+
+
+def evaluate_accepted_transcript(
+    *,
+    message,
+    transcript_router: TranscriptRouter,
+    ai_director: AIDirector,
+    scheduler: SceneScheduler,
+    trigger_prefilter: TranscriptTriggerPrefilter | None = None,
+    log=print,
+) -> None:
     if not scheduler.status().ai_enabled:
         log(
             f"Transcript accepted from {message.speaker}. "
             "AI evaluation skipped because AI mode is off."
         )
-        return False
+        return
 
-    log(f"Transcript accepted from {message.speaker}. Asking AI director...")
+    gate = scheduler.ai_evaluation_gate()
+    if not gate.allowed:
+        if gate.cooldown_remaining_seconds > 0:
+            log(
+                f"Transcript accepted from {message.speaker}. "
+                "AI evaluation skipped because switch cooldown has "
+                f"{gate.cooldown_remaining_seconds:.1f}s left."
+            )
+        else:
+            log(
+                f"Transcript accepted from {message.speaker}. "
+                f"AI evaluation skipped because {gate.reason}"
+            )
+        return
+
+    trigger_prefilter = trigger_prefilter or TranscriptTriggerPrefilter()
+    candidate_signal = trigger_prefilter.classify(
+        HypeContext(
+            transcripts=transcript_router.get_recent_events(),
+            reference_time_seconds=message.timestamp,
+        )
+    )
+    if candidate_signal is None:
+        log(
+            f"Transcript accepted from {message.speaker}. "
+            "Local prefilter found no trigger; AI evaluation skipped."
+        )
+        return
+
+    log(
+        f"Transcript accepted from {message.speaker}. "
+        "Local trigger found; Asking AI director..."
+    )
     try:
         context = transcript_router.get_recent_context_text()
-        decision = ai_director.decide(context)
+        decision = ai_director.decide(context, candidate_signal=candidate_signal)
     except AIDirectorError as exc:
         log(f"AI decision failed: {exc}")
-        return False
+        return
     except Exception as exc:
         log(f"AI decision failed unexpectedly: {exc}")
-        return False
+        return
 
     log(
         "AI decision: "
@@ -220,7 +290,6 @@ def process_line(
         f"duration={decision.duration_seconds}s"
     )
     scheduler.apply_ai_decision(decision)
-    return False
 
 
 def handle_command(command: str, scheduler: SceneScheduler, log=print) -> bool:
