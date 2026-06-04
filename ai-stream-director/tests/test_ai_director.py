@@ -23,6 +23,13 @@ class AIDirectorReadinessTests(unittest.TestCase):
         get.assert_called_once_with("http://ollama:11434/api/tags", timeout=5)
         response.raise_for_status.assert_called_once()
 
+    def test_readiness_accepts_ollama_model_alias_field(self) -> None:
+        response = Mock()
+        response.json.return_value = {"models": [{"model": "gemma3:4b"}]}
+
+        with patch("ai_director.requests.get", return_value=response):
+            AIDirector("http://ollama:11434", "gemma3:4b").check_readiness()
+
     def test_readiness_explains_missing_model_pull_command(self) -> None:
         response = Mock()
         response.json.return_value = {"models": [{"name": "llama3.2:3b"}]}
@@ -44,6 +51,76 @@ class AIDirectorReadinessTests(unittest.TestCase):
 
 
 class AIDirectorDecisionTests(unittest.TestCase):
+    def test_provider_injection_supplies_readiness_and_generation(self) -> None:
+        class FakeProvider:
+            def __init__(self) -> None:
+                self.readiness_checks = 0
+                self.prompts: list[str] = []
+
+            def check_readiness(self) -> None:
+                self.readiness_checks += 1
+
+            def generate(self, prompt: str) -> str:
+                self.prompts.append(prompt)
+                return (
+                    '{"target_scene": "Player 4 Fullscreen", '
+                    '"confidence": 0.87, "duration_seconds": 11, '
+                    '"reason": "Player 4 hit a clutch moment."}'
+                )
+
+        provider = FakeProvider()
+        director = AIDirector(
+            "http://unused-provider",
+            "gemma3:4b",
+            provider=provider,
+        )
+        signal = HypeSignal(
+            stream_id="player_4",
+            trigger_time_seconds=9.5,
+            confidence=0.77,
+            reason="Matched excitement phrase: clutch.",
+        )
+
+        director.check_readiness()
+        decision = director.decide("player_4: clutch save", candidate_signal=signal)
+
+        self.assertEqual(provider.readiness_checks, 1)
+        self.assertEqual(len(provider.prompts), 1)
+        self.assertIn("Candidate trigger:", provider.prompts[0])
+        self.assertIn("stream_id: player_4", provider.prompts[0])
+        self.assertEqual(decision.target_scene, SCENES["player_4"])
+        self.assertEqual(decision.confidence, 0.87)
+        self.assertEqual(decision.duration_seconds, 11)
+
+    def test_decide_preserves_ollama_generate_payload(self) -> None:
+        response = Mock()
+        response.json.return_value = {
+            "response": (
+                '{"target_scene": "Player 2 Fullscreen", '
+                '"confidence": 0.91, "duration_seconds": 12, '
+                '"reason": "Player 2 found diamonds."}'
+            )
+        }
+
+        with patch("ai_director.requests.post", return_value=response) as post:
+            decision = AIDirector(
+                "http://ollama:11434",
+                "gemma3:4b",
+                timeout_seconds=17,
+            ).decide("player_2: no way, diamonds")
+
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[0], "http://ollama:11434/api/generate")
+        self.assertEqual(post.call_args.kwargs["timeout"], 17)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "gemma3:4b")
+        self.assertIn("player_2: no way, diamonds", payload["prompt"])
+        self.assertFalse(payload["stream"])
+        self.assertEqual(payload["format"], "json")
+        self.assertEqual(payload["options"], {"temperature": 0.2})
+        response.raise_for_status.assert_called_once()
+        self.assertEqual(decision.target_scene, SCENES["player_2"])
+
     def test_decide_rejects_missing_ollama_response_field(self) -> None:
         response = Mock()
         response.json.return_value = {"done": True}

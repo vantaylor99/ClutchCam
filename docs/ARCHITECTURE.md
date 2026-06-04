@@ -7,10 +7,11 @@ transcription, AI-assisted trigger detection, and programmatic switching.
 ## Current Baseline
 
 The existing `ai-stream-director` app is intentionally narrow. It accepts manual
-terminal transcript lines, asks a local Ollama/Gemma-compatible model for a JSON
-scene decision, and switches OBS scenes immediately. This is useful because it
-already exercises the orchestration loop, confidence thresholds, cooldowns,
-manual overrides, and OBS control boundary.
+terminal transcript lines, asks Gemma for a JSON scene decision through a small
+provider boundary, and switches OBS scenes immediately. The default provider
+keeps the current Ollama-native `/api/tags` and `/api/generate` behavior. This
+is useful because it already exercises the orchestration loop, confidence
+thresholds, cooldowns, manual overrides, and OBS control boundary.
 
 The production system should keep those boundaries but replace manual transcript
 input with timestamped events and immediate live switching with buffered
@@ -133,7 +134,10 @@ context-heavy or ambiguous moments. The implementation must not assume where
 Gemma runs. `GEMMA_API_URL` and `GEMMA_MODEL` are the primary contract.
 The current `services.ai` module accepts transcript or hybrid context and
 returns optional `HypeSignal` values without assuming Ollama, Docker, local host
-processes, or remote GPU inference.
+processes, or remote GPU inference. The MVP `AIDirector` owns prompt
+construction, strict JSON decision parsing, and scene normalization, while its
+provider adapter owns provider-specific readiness checks and generation
+request/response shapes.
 
 ### Switching
 

@@ -10,5 +10,6 @@ __all__ = [
     "buffer",
     "ingestion",
     "switcher",
+    "telemetry",
     "transcription",
 ]

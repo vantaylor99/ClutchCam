@@ -149,9 +149,6 @@ Active review tickets: none.
 
 Active implement tickets:
 
-- `tickets/implement/23-structured-event-logging.md`
-- `tickets/implement/24-buffer-worker-runtime-entrypoint.md`
-- `tickets/implement/25-transcription-worker-runtime-entrypoint.md`
 - `tickets/implement/26-local-linux-compose-profiles.md`
 - `tickets/implement/27-local-stack-smoke-entrypoints.md`
 
@@ -161,6 +158,7 @@ Active fix tickets: none.
 
 Completed review tickets:
 
+- `tickets/complete/10-gemma-orchestration-adapter.md`
 - `tickets/complete/1-nonblocking-terminal-loop.md`
 - `tickets/complete/2-local-smoke-test-mode.md`
 - `tickets/complete/3-ollama-readiness-and-json-hardening.md`
@@ -179,10 +177,12 @@ Completed review tickets:
 - `tickets/complete/21-transcript-trigger-prefilter.md`
 - `tickets/complete/22-transcription-runtime-pump.md`
 - `tickets/complete/22-python-bytecode-artifacts-dirty-worktree.md`
+- `tickets/complete/23-structured-event-logging.md`
+- `tickets/complete/24-buffer-worker-runtime-entrypoint.md`
+- `tickets/complete/25-transcription-worker-runtime-entrypoint.md`
 
 Backlog tickets:
 
-- `tickets/backlog/10-gemma-orchestration-adapter.md`
 - `tickets/backlog/11-openai-compatible-gemma-client.md`
 - `tickets/backlog/12-buffer-clip-resolver.md`
 - `tickets/backlog/13-buffered-switcher-playback.md`

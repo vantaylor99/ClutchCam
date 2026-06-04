@@ -1,7 +1,7 @@
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
 
 import requests
 
@@ -21,23 +21,31 @@ class AIDirectorError(RuntimeError):
     """User-facing AI director failure."""
 
 
-class AIDirector:
-    def __init__(self, ollama_base_url: str, model: str, timeout_seconds: int = 60):
-        self.ollama_base_url = ollama_base_url.rstrip("/")
+class DirectorProvider(Protocol):
+    def check_readiness(self) -> None:
+        """Verify that the backing model provider can serve decisions."""
+
+    def generate(self, prompt: str) -> Any:
+        """Return the provider's raw decision payload for the director to parse."""
+
+
+class OllamaDirectorProvider:
+    def __init__(self, base_url: str, model: str, timeout_seconds: int = 60):
+        self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
 
     def check_readiness(self) -> None:
         try:
             response = requests.get(
-                f"{self.ollama_base_url}/api/tags",
+                f"{self.base_url}/api/tags",
                 timeout=5,
             )
             response.raise_for_status()
         except requests.RequestException as exc:
             raise AIDirectorError(
                 "Ollama is not reachable at "
-                f"{self.ollama_base_url}. Start Ollama or check OLLAMA_BASE_URL."
+                f"{self.base_url}. Start Ollama or check OLLAMA_BASE_URL."
             ) from exc
 
         try:
@@ -68,21 +76,13 @@ class AIDirector:
         if self.model not in available_models:
             raise AIDirectorError(
                 f'Ollama model "{self.model}" is not installed. '
-                f'Run: ollama pull {self.model}'
+                f"Run: ollama pull {self.model}"
             )
 
-    def decide(
-        self,
-        transcript_context: str,
-        candidate_signal: HypeSignal | None = None,
-    ) -> DirectorDecision:
-        prompt = self._build_prompt(
-            transcript_context,
-            candidate_signal=candidate_signal,
-        )
+    def generate(self, prompt: str) -> Any:
         try:
             response = requests.post(
-                f"{self.ollama_base_url}/api/generate",
+                f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,
@@ -110,7 +110,40 @@ class AIDirector:
             raise AIDirectorError("Ollama returned an unexpected response shape.")
         if "response" not in payload:
             raise AIDirectorError("Ollama response did not include a decision.")
-        raw_decision = payload["response"]
+
+        return payload["response"]
+
+
+class AIDirector:
+    def __init__(
+        self,
+        ollama_base_url: str,
+        model: str,
+        timeout_seconds: int = 60,
+        provider: DirectorProvider | None = None,
+    ):
+        self.ollama_base_url = ollama_base_url.rstrip("/")
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self._provider = provider or OllamaDirectorProvider(
+            base_url=ollama_base_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def check_readiness(self) -> None:
+        self._provider.check_readiness()
+
+    def decide(
+        self,
+        transcript_context: str,
+        candidate_signal: HypeSignal | None = None,
+    ) -> DirectorDecision:
+        prompt = self._build_prompt(
+            transcript_context,
+            candidate_signal=candidate_signal,
+        )
+        raw_decision = self._provider.generate(prompt)
         data = self._parse_decision_json(raw_decision)
         return self._normalize_decision(data)
 
