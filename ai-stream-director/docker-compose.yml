@@ -1,5 +1,6 @@
 services:
   media-server:
+    profiles: ["media-server", "local-linux"]
     image: ${SRS_IMAGE:-ossrs/srs:6}
     container_name: ai-stream-director-media-server
     command: ["./objs/srs", "-c", "conf/clutchcam.conf"]
@@ -11,11 +12,101 @@ services:
     volumes:
       - ./infra/srs.conf:/usr/local/srs/conf/clutchcam.conf:ro
 
+  buffer-worker:
+    profiles: ["buffer-worker", "local-linux"]
+    build: .
+    container_name: ai-stream-director-buffer-worker
+    depends_on:
+      media-server:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      INGEST_API_URL: ${INGEST_API_URL:-rtmp://media-server:1935/live}
+      LOOKBACK_BUFFER_DIR: ${LOOKBACK_BUFFER_DIR:-/dev/shm/clutchcam}
+      LOOKBACK_WINDOW_SECONDS: ${LOOKBACK_WINDOW_SECONDS:-30}
+      SWITCH_LOOKBACK_SECONDS: ${SWITCH_LOOKBACK_SECONDS:-15}
+      LOOKBACK_SEGMENT_SECONDS: ${LOOKBACK_SEGMENT_SECONDS:-2}
+      FFMPEG_EXECUTABLE: ${FFMPEG_EXECUTABLE:-ffmpeg}
+    volumes:
+      - type: bind
+        source: ${LOOKBACK_BUFFER_HOST_DIR:-/dev/shm/clutchcam}
+        target: /dev/shm/clutchcam
+    command: ["python", "-m", "buffer_worker"]
+    restart: unless-stopped
+
+  transcription-worker:
+    profiles: ["transcription-worker", "local-linux"]
+    build: .
+    container_name: ai-stream-director-transcription-worker
+    depends_on:
+      media-server:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      INGEST_API_URL: ${INGEST_API_URL:-rtmp://media-server:1935/live}
+      TRANSCRIPTION_API_URL: ${TRANSCRIPTION_API_URL:-http://host.docker.internal:8000}
+      TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS: ${TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS:-30}
+      AUDIO_EXTRACT_DIR: ${AUDIO_EXTRACT_DIR:-/dev/shm/clutchcam-audio}
+      AUDIO_EXTRACT_SAMPLE_RATE: ${AUDIO_EXTRACT_SAMPLE_RATE:-16000}
+      AUDIO_EXTRACT_CHANNELS: ${AUDIO_EXTRACT_CHANNELS:-1}
+      AUDIO_EXTRACT_CHUNK_SECONDS: ${AUDIO_EXTRACT_CHUNK_SECONDS:-5}
+      AUDIO_EXTRACT_CODEC: ${AUDIO_EXTRACT_CODEC:-pcm_s16le}
+      AUDIO_EXTRACT_CONTAINER: ${AUDIO_EXTRACT_CONTAINER:-wav}
+      FFMPEG_EXECUTABLE: ${FFMPEG_EXECUTABLE:-ffmpeg}
+    volumes:
+      - type: bind
+        source: ${AUDIO_EXTRACT_HOST_DIR:-/dev/shm/clutchcam-audio}
+        target: /dev/shm/clutchcam-audio
+    command: ["python", "-m", "transcription_worker"]
+    restart: unless-stopped
+
+  orchestrator:
+    profiles: ["orchestrator", "local-linux"]
+    build: .
+    container_name: ai-stream-director-orchestrator
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OBS_HOST: ${OBS_HOST:-host.docker.internal}
+      OBS_PORT: ${OBS_PORT:-4455}
+      OBS_PASSWORD: ${OBS_PASSWORD:-change-me}
+      DRY_RUN_OBS: ${DRY_RUN_OBS:-false}
+      INGEST_API_URL: ${INGEST_API_URL:-rtmp://media-server:1935/live}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      LOOKBACK_BUFFER_DIR: ${LOOKBACK_BUFFER_DIR:-/dev/shm/clutchcam}
+      AUDIO_EXTRACT_DIR: ${AUDIO_EXTRACT_DIR:-/dev/shm/clutchcam-audio}
+      GEMMA_API_URL: ${GEMMA_API_URL:-http://ollama:11434}
+      GEMMA_MODEL: ${GEMMA_MODEL:-gemma3:4b}
+      GEMMA_API_KEY: ${GEMMA_API_KEY:-}
+      CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.75}
+      MIN_SWITCH_INTERVAL_SECONDS: ${MIN_SWITCH_INTERVAL_SECONDS:-8}
+      MAX_FOCUS_DURATION_SECONDS: ${MAX_FOCUS_DURATION_SECONDS:-20}
+      TRANSCRIPT_HISTORY_SECONDS: ${TRANSCRIPT_HISTORY_SECONDS:-30}
+      TRANSCRIPT_HISTORY_MESSAGES: ${TRANSCRIPT_HISTORY_MESSAGES:-20}
+      TRANSCRIPT_PREFILTER_ENABLED: ${TRANSCRIPT_PREFILTER_ENABLED:-true}
+      TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS: ${TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS:-6}
+      TRANSCRIPT_PREFILTER_DUPLICATE_WINDOW_SECONDS: ${TRANSCRIPT_PREFILTER_DUPLICATE_WINDOW_SECONDS:-12}
+      TRANSCRIPT_PREFILTER_CONTEXT_SECONDS: ${TRANSCRIPT_PREFILTER_CONTEXT_SECONDS:-30}
+      TRANSCRIPT_PREFILTER_MIN_CONFIDENCE: ${TRANSCRIPT_PREFILTER_MIN_CONFIDENCE:-0.70}
+    volumes:
+      - type: bind
+        source: ${LOOKBACK_BUFFER_HOST_DIR:-/dev/shm/clutchcam}
+        target: /dev/shm/clutchcam
+      - type: bind
+        source: ${AUDIO_EXTRACT_HOST_DIR:-/dev/shm/clutchcam-audio}
+        target: /dev/shm/clutchcam-audio
+    command: ["python", "src/main.py"]
+    stdin_open: true
+    tty: true
+
   ollama:
+    profiles: ["local-ai"]
     image: ollama/ollama:latest
     container_name: ai-stream-director-ollama
     ports:
-      - "11434:11434"
+      - "${OLLAMA_BIND_ADDR:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
@@ -25,6 +116,7 @@ services:
       retries: 12
 
   ollama-pull:
+    profiles: ["local-ai"]
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -35,24 +127,6 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
     command: ["sh", "-c", "ollama pull \"$${GEMMA_MODEL:-$${OLLAMA_MODEL:-gemma3:4b}}\""]
     restart: "no"
-
-  app:
-    build: .
-    container_name: ai-stream-director-app
-    depends_on:
-      media-server:
-        condition: service_started
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      INGEST_API_URL: ${INGEST_API_URL:-rtmp://media-server:1935/live}
-      OLLAMA_BASE_URL: http://ollama:11434
-    stdin_open: true
-    tty: true
 
 volumes:
   ollama-data:

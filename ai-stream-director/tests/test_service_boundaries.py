@@ -44,6 +44,7 @@ class ServiceBoundaryImportTests(unittest.TestCase):
                 "services.ai",
                 "services.switcher",
                 "services.telemetry",
+                "services.health",
             ]
             for module in modules:
                 importlib.import_module(module)

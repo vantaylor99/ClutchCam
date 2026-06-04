@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -7,9 +8,37 @@ from unittest.mock import Mock, patch
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from ai_director import AIDirector, AIDirectorError  # noqa: E402
+from ai_director import (  # noqa: E402
+    AIDirector,
+    AIDirectorError,
+    OllamaDirectorProvider,
+    OpenAICompatibleDirectorProvider,
+    create_director_provider,
+)
 from config import SCENES  # noqa: E402
 from contracts import HypeSignal  # noqa: E402
+
+
+class DirectorProviderSelectionTests(unittest.TestCase):
+    def test_create_provider_selects_ollama_by_default_value(self) -> None:
+        provider = create_director_provider(
+            "ollama",
+            api_url="http://ollama:11434",
+            model="gemma3:4b",
+        )
+
+        self.assertIsInstance(provider, OllamaDirectorProvider)
+
+    def test_create_provider_selects_openai_compatible_aliases(self) -> None:
+        for provider_name in ("openai-compatible", "openai", "vllm"):
+            with self.subTest(provider_name=provider_name):
+                provider = create_director_provider(
+                    provider_name,
+                    api_url="http://vllm:8000",
+                    model="google/gemma-3-4b-it",
+                )
+
+                self.assertIsInstance(provider, OpenAICompatibleDirectorProvider)
 
 
 class AIDirectorReadinessTests(unittest.TestCase):
@@ -48,6 +77,19 @@ class AIDirectorReadinessTests(unittest.TestCase):
         with patch("ai_director.requests.get", return_value=response):
             with self.assertRaisesRegex(AIDirectorError, "model list was missing"):
                 AIDirector("http://ollama:11434", "gemma3:4b").check_readiness()
+
+    def test_openai_compatible_readiness_does_not_require_model_list(self) -> None:
+        response = Mock()
+
+        with patch("ai_director.requests.get", return_value=response) as get:
+            AIDirector(
+                "http://vllm:8000",
+                "google/gemma-3-4b-it",
+                ai_provider="openai-compatible",
+            ).check_readiness()
+
+        get.assert_called_once_with("http://vllm:8000", timeout=5)
+        response.raise_for_status.assert_called_once()
 
 
 class AIDirectorDecisionTests(unittest.TestCase):
@@ -128,6 +170,137 @@ class AIDirectorDecisionTests(unittest.TestCase):
         with patch("ai_director.requests.post", return_value=response):
             with self.assertRaisesRegex(AIDirectorError, "did not include a decision"):
                 AIDirector("http://ollama:11434", "gemma3:4b").decide("player_1: hi")
+
+    def test_decide_uses_openai_compatible_chat_completion_payload(self) -> None:
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '{"target_scene": "Player 1 Fullscreen", '
+                            '"confidence": 0.86, "duration_seconds": 10, '
+                            '"reason": "Player 1 called out a clutch save."}'
+                        ),
+                    }
+                }
+            ]
+        }
+        signal = HypeSignal(
+            stream_id="player_1",
+            trigger_time_seconds=12.5,
+            confidence=0.8,
+            reason="Matched excitement phrase: clutch.",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"AI_PROVIDER": "openai-compatible", "GEMMA_API_KEY": "test-key"},
+        ):
+            with patch("ai_director.requests.post", return_value=response) as post:
+                decision = AIDirector(
+                    "http://vllm:8000",
+                    "google/gemma-3-4b-it",
+                    timeout_seconds=19,
+                ).decide("player_1: clutch save", candidate_signal=signal)
+
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            "http://vllm:8000/v1/chat/completions",
+        )
+        self.assertEqual(post.call_args.kwargs["timeout"], 19)
+        self.assertEqual(
+            post.call_args.kwargs["headers"]["Authorization"],
+            "Bearer test-key",
+        )
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "google/gemma-3-4b-it")
+        self.assertEqual(payload["temperature"], 0.2)
+        self.assertFalse(payload["stream"])
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["messages"][0]["role"], "system")
+        self.assertEqual(payload["messages"][1]["role"], "user")
+        self.assertIn("Candidate trigger:", payload["messages"][1]["content"])
+        self.assertIn("stream_id: player_1", payload["messages"][1]["content"])
+        self.assertIn("player_1: clutch save", payload["messages"][1]["content"])
+        response.raise_for_status.assert_called_once()
+        self.assertEqual(decision.target_scene, SCENES["player_1"])
+        self.assertEqual(decision.confidence, 0.86)
+
+    def test_openai_compatible_uses_full_chat_completion_url_when_configured(
+        self,
+    ) -> None:
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"target_scene": "Quad View", "confidence": 0.2, '
+                            '"duration_seconds": 8, "reason": "No focus."}'
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("ai_director.requests.post", return_value=response) as post:
+            AIDirector(
+                "https://inference.example.com/custom/chat/completions",
+                "gemma-3-4b-it",
+                ai_provider="openai-compatible",
+            ).decide("player_2: routine farming")
+
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://inference.example.com/custom/chat/completions",
+        )
+
+    def test_openai_compatible_appends_chat_completion_path_under_base_path(
+        self,
+    ) -> None:
+        response = Mock()
+        response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"target_scene": "Quad View", "confidence": 0.2, '
+                            '"duration_seconds": 8, "reason": "No focus."}'
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("ai_director.requests.post", return_value=response) as post:
+            AIDirector(
+                "https://inference.example.com/openai",
+                "gemma-3-4b-it",
+                ai_provider="openai-compatible",
+            ).decide("player_2: routine farming")
+
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://inference.example.com/openai/v1/chat/completions",
+        )
+
+    def test_openai_compatible_rejects_missing_assistant_content(self) -> None:
+        response = Mock()
+        response.json.return_value = {"choices": [{"message": {}}]}
+
+        with patch("ai_director.requests.post", return_value=response):
+            with self.assertRaisesRegex(
+                AIDirectorError,
+                "assistant message content",
+            ):
+                AIDirector(
+                    "http://vllm:8000",
+                    "google/gemma-3-4b-it",
+                    ai_provider="openai-compatible",
+                ).decide("player_1: hi")
 
     def test_prompt_includes_candidate_separately_from_recent_context(self) -> None:
         signal = HypeSignal(

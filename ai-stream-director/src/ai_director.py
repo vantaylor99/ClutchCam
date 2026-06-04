@@ -1,11 +1,19 @@
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Protocol
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
-from config import SCENES, VALID_SCENE_NAMES
+from config import (
+    AI_PROVIDER_OLLAMA,
+    AI_PROVIDER_OPENAI_COMPATIBLE,
+    SCENES,
+    VALID_SCENE_NAMES,
+    normalize_ai_provider,
+)
 from contracts import HypeSignal
 
 
@@ -114,6 +122,111 @@ class OllamaDirectorProvider:
         return payload["response"]
 
 
+class OpenAICompatibleDirectorProvider:
+    def __init__(
+        self,
+        api_url: str,
+        model: str,
+        timeout_seconds: int = 60,
+        api_key: str | None = None,
+        temperature: float = 0.2,
+    ):
+        self.api_url = api_url.strip()
+        self.endpoint_url = _chat_completions_endpoint(self.api_url)
+        self.readiness_url = _readiness_probe_url(self.api_url)
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self.api_key = api_key or ""
+        self.temperature = temperature
+
+    def check_readiness(self) -> None:
+        if not self.api_url:
+            raise AIDirectorError(
+                "GEMMA_API_URL is required for the OpenAI-compatible provider."
+            )
+        if not self.model:
+            raise AIDirectorError(
+                "GEMMA_MODEL is required for the OpenAI-compatible provider."
+            )
+
+        try:
+            response = requests.get(self.readiness_url, timeout=5)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise AIDirectorError(
+                "OpenAI-compatible AI provider is not reachable at "
+                f"{self.readiness_url}. Check GEMMA_API_URL."
+            ) from exc
+
+    def generate(self, prompt: str) -> Any:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            response = requests.post(
+                self.endpoint_url,
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Return only one JSON object matching the user's "
+                                "requested scene-decision schema."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": self.temperature,
+                    "stream": False,
+                    "response_format": {"type": "json_object"},
+                },
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise AIDirectorError(
+                "OpenAI-compatible generation request failed. Check "
+                "AI_PROVIDER, GEMMA_API_URL, GEMMA_MODEL, and credentials."
+            ) from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AIDirectorError(
+                "OpenAI-compatible provider returned a non-JSON HTTP response."
+            ) from exc
+
+        return _extract_openai_message_content(payload)
+
+
+def create_director_provider(
+    ai_provider: str,
+    api_url: str,
+    model: str,
+    timeout_seconds: int = 60,
+    api_key: str | None = None,
+) -> DirectorProvider:
+    provider = normalize_ai_provider(ai_provider)
+    if provider == AI_PROVIDER_OLLAMA:
+        return OllamaDirectorProvider(
+            base_url=api_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+        return OpenAICompatibleDirectorProvider(
+            api_url=api_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            api_key=api_key,
+        )
+
+    raise AIDirectorError(f"Unsupported AI provider: {ai_provider}")
+
+
 class AIDirector:
     def __init__(
         self,
@@ -121,14 +234,27 @@ class AIDirector:
         model: str,
         timeout_seconds: int = 60,
         provider: DirectorProvider | None = None,
+        ai_provider: str | None = None,
+        api_key: str | None = None,
     ):
         self.ollama_base_url = ollama_base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
-        self._provider = provider or OllamaDirectorProvider(
-            base_url=ollama_base_url,
+        if provider is not None:
+            self.ai_provider = (
+                normalize_ai_provider(ai_provider) if ai_provider else "injected"
+            )
+            self._provider = provider
+            return
+
+        provider_name = ai_provider or os.getenv("AI_PROVIDER", AI_PROVIDER_OLLAMA)
+        self.ai_provider = normalize_ai_provider(provider_name)
+        self._provider = create_director_provider(
+            ai_provider=self.ai_provider,
+            api_url=ollama_base_url,
             model=model,
             timeout_seconds=timeout_seconds,
+            api_key=api_key if api_key is not None else os.getenv("GEMMA_API_KEY"),
         )
 
     def check_readiness(self) -> None:
@@ -275,3 +401,64 @@ def _candidate_context(candidate_signal: HypeSignal | None) -> str:
             f"source: {candidate_signal.source}",
         ]
     )
+
+
+def _chat_completions_endpoint(api_url: str) -> str:
+    stripped_url = api_url.strip().rstrip("/")
+    parsed = urlparse(stripped_url)
+    path = parsed.path.rstrip("/")
+
+    if path.endswith("/chat/completions"):
+        endpoint_path = path
+    elif path.endswith("/v1"):
+        endpoint_path = f"{path}/chat/completions"
+    elif path:
+        endpoint_path = f"{path}/v1/chat/completions"
+    else:
+        endpoint_path = "/v1/chat/completions"
+
+    return urlunparse(parsed._replace(path=endpoint_path))
+
+
+def _readiness_probe_url(api_url: str) -> str:
+    stripped_url = api_url.strip().rstrip("/")
+    parsed = urlparse(stripped_url)
+    if parsed.scheme and parsed.netloc:
+        return urlunparse(
+            parsed._replace(path="", params="", query="", fragment="")
+        ).rstrip("/")
+
+    return stripped_url
+
+
+def _extract_openai_message_content(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        raise AIDirectorError(
+            "OpenAI-compatible provider returned an unexpected response shape."
+        )
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise AIDirectorError(
+            "OpenAI-compatible response did not include assistant message content."
+        )
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise AIDirectorError(
+            "OpenAI-compatible response did not include assistant message content."
+        )
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        raise AIDirectorError(
+            "OpenAI-compatible response did not include assistant message content."
+        )
+
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise AIDirectorError(
+            "OpenAI-compatible response did not include assistant message content."
+        )
+
+    return content

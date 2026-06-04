@@ -11,7 +11,9 @@ terminal transcript lines, asks Gemma for a JSON scene decision through a small
 provider boundary, and switches OBS scenes immediately. The default provider
 keeps the current Ollama-native `/api/tags` and `/api/generate` behavior. This
 is useful because it already exercises the orchestration loop, confidence
-thresholds, cooldowns, manual overrides, and OBS control boundary.
+thresholds, cooldowns, manual overrides, and OBS control boundary. The same
+boundary can also target OpenAI-compatible chat-completion servers such as vLLM
+by selecting the provider explicitly.
 
 The production system should keep those boundaries but replace manual transcript
 input with timestamped events and immediate live switching with buffered
@@ -70,9 +72,9 @@ subprocesses, Faster-Whisper clients, media servers, AI clients, Docker
 containers, or network connections.
 
 Production defaults remain environment-driven through `config.py`, including
-`INGEST_API_URL`, `TRANSCRIPTION_API_URL`,
+`AI_PROVIDER`, `INGEST_API_URL`, `TRANSCRIPTION_API_URL`,
 `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`, `GEMMA_API_URL`, `GEMMA_MODEL`,
-`LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
+optional `GEMMA_API_KEY`, `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
@@ -131,13 +133,17 @@ MVP does not yet start the extractor or transcriber at runtime.
 
 The AI layer should use cheap local transcript rules first, then call Gemma for
 context-heavy or ambiguous moments. The implementation must not assume where
-Gemma runs. `GEMMA_API_URL` and `GEMMA_MODEL` are the primary contract.
+Gemma runs. `AI_PROVIDER`, `GEMMA_API_URL`, and `GEMMA_MODEL` are the primary
+contract.
 The current `services.ai` module accepts transcript or hybrid context and
 returns optional `HypeSignal` values without assuming Ollama, Docker, local host
 processes, or remote GPU inference. The MVP `AIDirector` owns prompt
 construction, strict JSON decision parsing, and scene normalization, while its
 provider adapter owns provider-specific readiness checks and generation
-request/response shapes.
+request/response shapes. `AI_PROVIDER=ollama` keeps the native Ollama `/api/tags`
+and `/api/generate` flow. `AI_PROVIDER=openai-compatible` posts chat-completion
+requests to the configured endpoint and parses the assistant message content as
+the raw decision string before the same strict director parsing runs.
 
 ### Switching
 
@@ -181,14 +187,36 @@ segments. Defaults are a 30-second retention window and a 15-second pre-roll.
 The app logic must not know where inference runs. Local Ollama, local vLLM, and
 cloud GPU inference should all be selected by environment variables:
 
+- `AI_PROVIDER`
 - `GEMMA_API_URL`
 - `GEMMA_MODEL`
+- `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
 - `INGEST_API_URL`
 
 `OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain accepted compatibility aliases for
 the current MVP.
+
+Provider examples:
+
+```text
+# Local Ollama, default native provider.
+AI_PROVIDER=ollama
+GEMMA_API_URL=http://ollama:11434
+GEMMA_MODEL=gemma3:4b
+
+# Local vLLM or another OpenAI-compatible server.
+AI_PROVIDER=openai-compatible
+GEMMA_API_URL=http://vllm:8000
+GEMMA_MODEL=google/gemma-3-4b-it
+
+# Remote OpenAI-compatible endpoint with an explicit chat-completions path.
+AI_PROVIDER=openai-compatible
+GEMMA_API_URL=https://inference.example.com/v1/chat/completions
+GEMMA_MODEL=gemma-3-4b-it
+GEMMA_API_KEY=<token>
+```
 
 ## Near-Term Sequence
 

@@ -78,6 +78,8 @@ def main() -> int:
     ai_director = AIDirector(
         ollama_base_url=config.gemma_api_url,
         model=config.gemma_model,
+        ai_provider=config.ai_provider,
+        api_key=config.gemma_api_key,
     )
     trigger_prefilter = TranscriptTriggerPrefilter(
         TranscriptTriggerPrefilterConfig(

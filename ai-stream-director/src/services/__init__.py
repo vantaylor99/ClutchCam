@@ -8,6 +8,7 @@ OBS connections.
 __all__ = [
     "ai",
     "buffer",
+    "health",
     "ingestion",
     "switcher",
     "telemetry",

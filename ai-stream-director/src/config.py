@@ -14,6 +14,18 @@ SCENES = {
 
 VALID_SCENE_NAMES = set(SCENES.values())
 
+AI_PROVIDER_OLLAMA = "ollama"
+AI_PROVIDER_OPENAI_COMPATIBLE = "openai-compatible"
+SUPPORTED_AI_PROVIDERS = (AI_PROVIDER_OLLAMA, AI_PROVIDER_OPENAI_COMPATIBLE)
+
+_AI_PROVIDER_ALIASES = {
+    AI_PROVIDER_OLLAMA: AI_PROVIDER_OLLAMA,
+    "ollama-native": AI_PROVIDER_OLLAMA,
+    AI_PROVIDER_OPENAI_COMPATIBLE: AI_PROVIDER_OPENAI_COMPATIBLE,
+    "openai": AI_PROVIDER_OPENAI_COMPATIBLE,
+    "vllm": AI_PROVIDER_OPENAI_COMPATIBLE,
+}
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -21,11 +33,13 @@ class AppConfig:
     obs_port: int
     obs_password: str
     dry_run_obs: bool
+    ai_provider: str
     ingest_api_url: str
     transcription_api_url: str
     transcription_request_timeout_seconds: float
     gemma_api_url: str
     gemma_model: str
+    gemma_api_key: str
     lookback_buffer_dir: str
     lookback_window_seconds: int
     switch_lookback_seconds: int
@@ -66,6 +80,9 @@ def get_config() -> AppConfig:
         obs_port=int(os.getenv("OBS_PORT", "4455")),
         obs_password=os.getenv("OBS_PASSWORD", ""),
         dry_run_obs=_parse_bool(os.getenv("DRY_RUN_OBS", "false")),
+        ai_provider=normalize_ai_provider(
+            os.getenv("AI_PROVIDER", AI_PROVIDER_OLLAMA)
+        ),
         ingest_api_url=os.getenv("INGEST_API_URL", "rtmp://localhost/live"),
         transcription_api_url=os.getenv(
             "TRANSCRIPTION_API_URL",
@@ -84,6 +101,7 @@ def get_config() -> AppConfig:
             fallback_name="OLLAMA_MODEL",
             default="gemma3:4b",
         ),
+        gemma_api_key=os.getenv("GEMMA_API_KEY", ""),
         lookback_buffer_dir=os.getenv("LOOKBACK_BUFFER_DIR", "/dev/shm/clutchcam"),
         lookback_window_seconds=int(os.getenv("LOOKBACK_WINDOW_SECONDS", "30")),
         switch_lookback_seconds=int(os.getenv("SWITCH_LOOKBACK_SECONDS", "15")),
@@ -130,6 +148,18 @@ def get_config() -> AppConfig:
 
 def _parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def normalize_ai_provider(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    provider = _AI_PROVIDER_ALIASES.get(normalized)
+    if provider is not None:
+        return provider
+
+    supported = ", ".join(SUPPORTED_AI_PROVIDERS)
+    raise ValueError(
+        f"Unsupported AI_PROVIDER {value!r}. Expected one of: {supported}."
+    )
 
 
 def _compat_env(primary_name: str, fallback_name: str, default: str) -> str:

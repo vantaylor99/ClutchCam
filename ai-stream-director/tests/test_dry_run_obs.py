@@ -13,7 +13,12 @@ from unittest.mock import ANY, Mock, patch
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from config import SCENES, get_config  # noqa: E402
+from config import (  # noqa: E402
+    AI_PROVIDER_OLLAMA,
+    AI_PROVIDER_OPENAI_COMPATIBLE,
+    SCENES,
+    get_config,
+)
 from ai_director import DirectorDecision  # noqa: E402
 from main import TerminalOutput, find_missing_scenes, process_line  # noqa: E402
 from obs_controller import DryRunOBSController, OBSController  # noqa: E402
@@ -31,6 +36,36 @@ class DryRunOBSConfigTests(unittest.TestCase):
             with self.subTest(value=value):
                 with patch.dict(os.environ, {"DRY_RUN_OBS": value}, clear=True):
                     self.assertTrue(get_config().dry_run_obs)
+
+    def test_ai_provider_defaults_to_ollama(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_config()
+
+        self.assertEqual(config.ai_provider, AI_PROVIDER_OLLAMA)
+        self.assertEqual(config.gemma_api_key, "")
+
+    def test_ai_provider_accepts_openai_compatible_alias_and_api_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_PROVIDER": "vllm",
+                "GEMMA_API_URL": "http://vllm:8000",
+                "GEMMA_MODEL": "google/gemma-3-4b-it",
+                "GEMMA_API_KEY": "secret-token",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.ai_provider, AI_PROVIDER_OPENAI_COMPATIBLE)
+        self.assertEqual(config.gemma_api_url, "http://vllm:8000")
+        self.assertEqual(config.gemma_model, "google/gemma-3-4b-it")
+        self.assertEqual(config.gemma_api_key, "secret-token")
+
+    def test_ai_provider_rejects_unknown_value(self) -> None:
+        with patch.dict(os.environ, {"AI_PROVIDER": "mystery"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "Unsupported AI_PROVIDER"):
+                get_config()
 
     def test_prefers_gemma_env_names_over_ollama_compat_aliases(self) -> None:
         with patch.dict(
