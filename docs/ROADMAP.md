@@ -151,6 +151,7 @@ Active review tickets: none.
 Active implement tickets:
 
 - `tickets/implement/14-sample-media-integration-harness.md`
+- `tickets/implement/18-operator-runbooks.md`
 
 Active plan tickets: none.
 
@@ -162,6 +163,7 @@ Completed review tickets:
 - `tickets/complete/11-openai-compatible-gemma-client.md`
 - `tickets/complete/12-buffer-clip-resolver.md`
 - `tickets/complete/13-buffered-switcher-playback.md`
+- `tickets/complete/16-local-linux-compose-stack.md`
 - `tickets/complete/1-nonblocking-terminal-loop.md`
 - `tickets/complete/2-local-smoke-test-mode.md`
 - `tickets/complete/3-ollama-readiness-and-json-hardening.md`
@@ -189,9 +191,7 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/16-local-linux-compose-stack.md`
 - `tickets/backlog/17-vision-keyframe-analysis.md`
-- `tickets/backlog/18-operator-runbooks.md`
 - `tickets/backlog/29-obs-buffered-media-source-adapter.md`
 - `tickets/backlog/30-runtime-event-pipeline-wiring.md`
 - `tickets/backlog/31-faster-whisper-compose-profile.md`
