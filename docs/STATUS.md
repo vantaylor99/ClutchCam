@@ -34,6 +34,9 @@ The MVP supports:
 - No-player smoke entrypoints under `ai-stream-director/scripts/` for media
   server, buffer worker, transcription API, AI endpoint, and dry-run
   orchestrator checks.
+- Operator runbooks under `docs/runbooks/` for terminal dry-run setup, local
+  Linux Compose setup, smoke checks, OBS scene preparation, stream publishing,
+  and recovery from common local event failures.
 
 ## What Is Partially Started
 
@@ -97,7 +100,7 @@ The repo does not yet include:
   and OBS processes.
 - OBS or PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
-- Production deployment documentation and operator recovery runbooks.
+- Production deployment documentation beyond the local MVP operator runbooks.
 
 ## Validation
 

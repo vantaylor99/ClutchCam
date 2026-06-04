@@ -22,6 +22,8 @@ It currently:
   AI classification, and switching adapters.
 - Includes first-pass local RTMP/SRT ingest and rolling lookback-buffer
   implementations behind those service boundaries.
+- Includes operator runbooks for the terminal dry-run MVP and local Linux
+  Compose smoke paths.
 
 It does not yet:
 
@@ -32,7 +34,8 @@ It does not yet:
 - Run visual or multimodal hype detection.
 - Provide a production deployment stack.
 
-See `docs/STATUS.md` for the detailed repo status.
+See `docs/STATUS.md` for the detailed repo status, and
+`docs/runbooks/README.md` for operator setup and recovery runbooks.
 
 ## Target System
 

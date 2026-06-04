@@ -148,10 +148,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/14-sample-media-integration-harness.md`
-- `tickets/implement/18-operator-runbooks.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -163,7 +160,9 @@ Completed review tickets:
 - `tickets/complete/11-openai-compatible-gemma-client.md`
 - `tickets/complete/12-buffer-clip-resolver.md`
 - `tickets/complete/13-buffered-switcher-playback.md`
+- `tickets/complete/14-sample-media-integration-harness.md`
 - `tickets/complete/16-local-linux-compose-stack.md`
+- `tickets/complete/18-operator-runbooks.md`
 - `tickets/complete/1-nonblocking-terminal-loop.md`
 - `tickets/complete/2-local-smoke-test-mode.md`
 - `tickets/complete/3-ollama-readiness-and-json-hardening.md`

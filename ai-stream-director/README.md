@@ -41,6 +41,10 @@ ready buffered media URI on a `SwitcherTarget`. A later OBS-specific adapter
 still needs to update or preload an OBS media source with that URI before
 performing the program cut.
 
+Operator runbooks for event setup, smoke checks, and recovery live in
+`../docs/runbooks/README.md`. Use them for the terminal dry-run MVP and the
+local Linux Compose stack.
+
 ## Project Structure
 
 ```text
