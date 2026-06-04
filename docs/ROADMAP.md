@@ -147,16 +147,20 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
 
-Active plan tickets: none.
+- `tickets/implement/19-ai-disabled-skips-model-call.md`
+- `tickets/implement/19-local-ai-dev-quickstart.md`
+- `tickets/implement/20-local-srs-dev-quickstart.md`
+
+Active plan tickets:
+
+- `tickets/plan/9-transcript-trigger-prefilter.md`
 
 Active fix tickets:
 
-- `tickets/fix/19-ai-disabled-skips-model-call.md`
 - `tickets/fix/20-terminal-prompt-log-interleaving.md`
 - `tickets/fix/21-dry-run-obs-without-obs-dependency.md`
-- `tickets/fix/22-python-bytecode-artifacts-dirty-worktree.md`
 
 Completed review tickets:
 
@@ -170,10 +174,10 @@ Completed review tickets:
 - `tickets/complete/7-local-media-server-ingest.md`
 - `tickets/complete/7-transcription-audio-extraction.md`
 - `tickets/complete/8-transcription-event-api.md`
+- `tickets/complete/22-python-bytecode-artifacts-dirty-worktree.md`
 
 Backlog tickets:
 
-- `tickets/backlog/9-transcript-trigger-prefilter.md`
 - `tickets/backlog/10-gemma-orchestration-adapter.md`
 - `tickets/backlog/11-openai-compatible-gemma-client.md`
 - `tickets/backlog/12-buffer-clip-resolver.md`
@@ -183,5 +187,3 @@ Backlog tickets:
 - `tickets/backlog/16-local-linux-compose-stack.md`
 - `tickets/backlog/17-vision-keyframe-analysis.md`
 - `tickets/backlog/18-operator-runbooks.md`
-- `tickets/backlog/19-local-ai-dev-quickstart.md`
-- `tickets/backlog/20-local-srs-dev-quickstart.md`
