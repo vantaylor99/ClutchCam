@@ -22,12 +22,14 @@ class SceneScheduler:
         confidence_threshold: float,
         min_switch_interval_seconds: int,
         max_focus_duration_seconds: int,
+        log=print,
     ):
         self.obs = obs_controller
         self.default_scene = default_scene
         self.confidence_threshold = confidence_threshold
         self.min_switch_interval_seconds = min_switch_interval_seconds
         self.max_focus_duration_seconds = max_focus_duration_seconds
+        self._log = log
         self.ai_enabled = True
         self.current_scene = default_scene
         self.focused_until: Optional[float] = None
@@ -39,15 +41,15 @@ class SceneScheduler:
 
     def apply_ai_decision(self, decision: DirectorDecision) -> None:
         if not self.ai_enabled:
-            print("AI decision ignored because AI mode is off.")
+            self._log("AI decision ignored because AI mode is off.")
             return
 
         if decision.target_scene == self.default_scene:
-            print(f"AI chose Quad View: {decision.reason}")
+            self._log(f"AI chose Quad View: {decision.reason}")
             return
 
         if decision.confidence < self.confidence_threshold:
-            print(
+            self._log(
                 "AI decision ignored because confidence "
                 f"{decision.confidence:.2f} is below {self.confidence_threshold:.2f}."
             )
@@ -55,14 +57,16 @@ class SceneScheduler:
 
         if not self._cooldown_has_passed():
             remaining = self._cooldown_remaining()
-            print(f"AI decision ignored because switch cooldown has {remaining:.1f}s left.")
+            self._log(
+                f"AI decision ignored because switch cooldown has {remaining:.1f}s left."
+            )
             return
 
         duration = min(decision.duration_seconds, self.max_focus_duration_seconds)
         duration = max(1, duration)
         self._switch_scene(decision.target_scene)
         self.focused_until = time.time() + duration
-        print(
+        self._log(
             f"AI focused {decision.target_scene} for {duration}s "
             f"(confidence {decision.confidence:.2f}): {decision.reason}"
         )
@@ -76,7 +80,7 @@ class SceneScheduler:
             if self._cooldown_has_passed():
                 self._switch_scene(self.default_scene)
                 self.focused_until = None
-                print("Focus duration ended. Returned to Quad View.")
+                self._log("Focus duration ended. Returned to Quad View.")
 
     def force_scene(self, scene_name: str) -> None:
         self._switch_scene(scene_name)
@@ -85,7 +89,7 @@ class SceneScheduler:
     def set_ai_enabled(self, enabled: bool) -> None:
         self.ai_enabled = enabled
         state = "on" if enabled else "off"
-        print(f"AI mode is now {state}.")
+        self._log(f"AI mode is now {state}.")
 
     def status(self) -> SchedulerStatus:
         return SchedulerStatus(

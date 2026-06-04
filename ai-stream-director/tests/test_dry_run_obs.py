@@ -15,7 +15,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from config import SCENES, get_config  # noqa: E402
 from ai_director import DirectorDecision  # noqa: E402
-from main import find_missing_scenes, process_line  # noqa: E402
+from main import TerminalOutput, find_missing_scenes, process_line  # noqa: E402
 from obs_controller import DryRunOBSController, OBSController  # noqa: E402
 from scheduler import SceneScheduler  # noqa: E402
 from transcript_router import TranscriptRouter  # noqa: E402
@@ -200,6 +200,33 @@ class OBSSceneValidationTests(unittest.TestCase):
             ),
             [],
         )
+
+
+class TerminalOutputTests(unittest.TestCase):
+    def test_refresh_prompt_logs_on_fresh_line(self) -> None:
+        stream = io.StringIO()
+        output = TerminalOutput(stream=stream)
+        output.enable_prompt_refresh()
+
+        output.log("AI decision: Player 2 Fullscreen")
+
+        self.assertEqual(stream.getvalue(), "\nAI decision: Player 2 Fullscreen\n> ")
+
+    def test_quit_command_uses_supplied_terminal_log(self) -> None:
+        stream = io.StringIO()
+        output = TerminalOutput(stream=stream)
+        output.enable_prompt_refresh()
+
+        should_quit = process_line(
+            "/quit",
+            TranscriptRouter(),
+            Mock(),
+            Mock(),
+            log=output.log,
+        )
+
+        self.assertTrue(should_quit)
+        self.assertEqual(stream.getvalue(), "\nExiting.\n> ")
 
 
 class TerminalProcessLineAITests(unittest.TestCase):

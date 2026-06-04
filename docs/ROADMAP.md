@@ -149,7 +149,6 @@ Active review tickets: none.
 
 Active implement tickets:
 
-- `tickets/implement/20-terminal-prompt-log-interleaving.md`
 - `tickets/implement/21-transcript-trigger-prefilter.md`
 
 Active plan tickets: none.
@@ -170,6 +169,7 @@ Completed review tickets:
 - `tickets/complete/8-transcription-event-api.md`
 - `tickets/complete/19-ai-disabled-skips-model-call.md`
 - `tickets/complete/19-local-ai-dev-quickstart.md`
+- `tickets/complete/20-terminal-prompt-log-interleaving.md`
 - `tickets/complete/20-local-srs-dev-quickstart.md`
 - `tickets/complete/21-dry-run-obs-without-obs-dependency.md`
 - `tickets/complete/22-python-bytecode-artifacts-dirty-worktree.md`

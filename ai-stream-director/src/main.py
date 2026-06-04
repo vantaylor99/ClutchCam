@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterable
+from typing import TextIO
 
 from ai_director import AIDirector, AIDirectorError
 from config import SCENES, get_config
@@ -30,18 +31,44 @@ Manual commands:
 
 TICK_INTERVAL_SECONDS = 0.25
 INPUT_CLOSED = None
+PROMPT_TEXT = "> "
+
+
+class TerminalOutput:
+    def __init__(self, stream: TextIO | None = None, prompt: str = PROMPT_TEXT):
+        self.stream = stream or sys.stdout
+        self.prompt = prompt
+        self.refresh_prompt = False
+        self._lock = threading.Lock()
+
+    def enable_prompt_refresh(self) -> None:
+        self.refresh_prompt = True
+
+    def log(self, message: str) -> None:
+        with self._lock:
+            if not self.refresh_prompt:
+                print(message, file=self.stream)
+                return
+
+            self.stream.write(f"\n{message}\n{self.prompt}")
+            self.stream.flush()
 
 
 def main() -> int:
     config = get_config()
+    terminal_output = TerminalOutput()
 
     if config.dry_run_obs:
-        obs_controller = DryRunOBSController(initial_scene=config.default_scene)
+        obs_controller = DryRunOBSController(
+            initial_scene=config.default_scene,
+            log=terminal_output.log,
+        )
     else:
         obs_controller = OBSController(
             host=config.obs_host,
             port=config.obs_port,
             password=config.obs_password,
+            log=terminal_output.log,
         )
     ai_director = AIDirector(
         ollama_base_url=config.gemma_api_url,
@@ -57,6 +84,7 @@ def main() -> int:
         confidence_threshold=config.confidence_threshold,
         min_switch_interval_seconds=config.min_switch_interval_seconds,
         max_focus_duration_seconds=config.max_focus_duration_seconds,
+        log=terminal_output.log,
     )
 
     print("AI Stream Director MVP")
@@ -99,6 +127,7 @@ def main() -> int:
         daemon=True,
     )
     input_thread.start()
+    terminal_output.enable_prompt_refresh()
 
     try:
         while True:
@@ -114,7 +143,13 @@ def main() -> int:
                 print("Exiting.")
                 return 0
 
-            if process_line(line, transcript_router, ai_director, scheduler):
+            if process_line(
+                line,
+                transcript_router,
+                ai_director,
+                scheduler,
+                log=terminal_output.log,
+            ):
                 return 0
     except KeyboardInterrupt:
         print()
@@ -135,7 +170,7 @@ def find_missing_scenes(
 def read_terminal_input(input_queue: queue.Queue[str | None]) -> None:
     while True:
         try:
-            line = input("> ").strip()
+            line = input(PROMPT_TEXT).strip()
         except (EOFError, KeyboardInterrupt):
             input_queue.put(INPUT_CLOSED)
             return
@@ -148,37 +183,38 @@ def process_line(
     transcript_router: TranscriptRouter,
     ai_director: AIDirector,
     scheduler: SceneScheduler,
+    log=print,
 ) -> bool:
     if not line:
         return False
 
     if line.startswith("/"):
-        return handle_command(line, scheduler)
+        return handle_command(line, scheduler, log=log)
 
     message = transcript_router.parse_line(line)
     if message is None:
-        print("Could not parse line. Use format: player_1: transcript text")
+        log("Could not parse line. Use format: player_1: transcript text")
         return False
 
     if not scheduler.status().ai_enabled:
-        print(
+        log(
             f"Transcript accepted from {message.speaker}. "
             "AI evaluation skipped because AI mode is off."
         )
         return False
 
-    print(f"Transcript accepted from {message.speaker}. Asking AI director...")
+    log(f"Transcript accepted from {message.speaker}. Asking AI director...")
     try:
         context = transcript_router.get_recent_context_text()
         decision = ai_director.decide(context)
     except AIDirectorError as exc:
-        print(f"AI decision failed: {exc}")
+        log(f"AI decision failed: {exc}")
         return False
     except Exception as exc:
-        print(f"AI decision failed unexpectedly: {exc}")
+        log(f"AI decision failed unexpectedly: {exc}")
         return False
 
-    print(
+    log(
         "AI decision: "
         f"{decision.target_scene}, confidence={decision.confidence:.2f}, "
         f"duration={decision.duration_seconds}s"
@@ -187,12 +223,12 @@ def process_line(
     return False
 
 
-def handle_command(command: str, scheduler: SceneScheduler) -> bool:
+def handle_command(command: str, scheduler: SceneScheduler, log=print) -> bool:
     normalized = command.strip().lower()
 
     if normalized in MANUAL_COMMAND_SCENES:
         scheduler.force_scene(MANUAL_COMMAND_SCENES[normalized])
-        print("Manual command applied.")
+        log("Manual command applied.")
         return False
 
     if normalized == "/ai on":
@@ -210,16 +246,18 @@ def handle_command(command: str, scheduler: SceneScheduler) -> bool:
             remaining = max(0.0, status.focused_until - time.time())
             focused_until = f"{remaining:.1f}s remaining"
 
-        print(f"Current scene: {status.current_scene}")
-        print(f"AI enabled: {status.ai_enabled}")
-        print(f"Focus timer: {focused_until}")
+        log(
+            f"Current scene: {status.current_scene}\n"
+            f"AI enabled: {status.ai_enabled}\n"
+            f"Focus timer: {focused_until}"
+        )
         return False
 
     if normalized == "/quit":
-        print("Exiting.")
+        log("Exiting.")
         return True
 
-    print("Unknown command. Try /status or /quit.")
+    log("Unknown command. Try /status or /quit.")
     return False
 
 
