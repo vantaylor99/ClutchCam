@@ -151,6 +151,13 @@ Active implement tickets: none.
 
 Active plan tickets: none.
 
+Active fix tickets:
+
+- `tickets/fix/19-ai-disabled-skips-model-call.md`
+- `tickets/fix/20-terminal-prompt-log-interleaving.md`
+- `tickets/fix/21-dry-run-obs-without-obs-dependency.md`
+- `tickets/fix/22-python-bytecode-artifacts-dirty-worktree.md`
+
 Completed review tickets:
 
 - `tickets/complete/1-nonblocking-terminal-loop.md`
@@ -176,3 +183,5 @@ Backlog tickets:
 - `tickets/backlog/16-local-linux-compose-stack.md`
 - `tickets/backlog/17-vision-keyframe-analysis.md`
 - `tickets/backlog/18-operator-runbooks.md`
+- `tickets/backlog/19-local-ai-dev-quickstart.md`
+- `tickets/backlog/20-local-srs-dev-quickstart.md`
