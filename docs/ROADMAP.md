@@ -169,7 +169,11 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
+
+- `tickets/implement/29-obs-buffered-media-source-adapter.md`
+- `tickets/implement/36-linux-cloud-deployment-topology-runbook.md`
+- `tickets/implement/39-openai-compatible-transcription-adapter.md`
 
 Active plan tickets: none.
 
@@ -217,8 +221,6 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/29-obs-buffered-media-source-adapter.md`
-- `tickets/backlog/36-linux-cloud-deployment-topology-runbook.md`
 - `tickets/backlog/37-latency-budget-and-soak-harness.md`
 - `tickets/backlog/38-runtime-config-and-secrets-hardening.md`
 - `tickets/backlog/90-optional-vision-keyframe-analysis.md`
