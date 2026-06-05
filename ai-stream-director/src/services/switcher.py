@@ -123,6 +123,53 @@ class SceneOutputSwitcher:
         )
 
 
+class MediaSourceOutputSwitcher:
+    """Update a media source with a ready target before switching scenes."""
+
+    def __init__(
+        self,
+        scene_controller,
+        *,
+        media_source_name: str,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        if not media_source_name:
+            raise OutputSwitchError("Media source switcher requires a source name.")
+        self.scene_controller = scene_controller
+        self.media_source_name = media_source_name
+        self.clock = clock
+
+    def switch(self, target: SwitcherTarget) -> SwitchResult:
+        if not target.media_uri:
+            return SwitchResult(
+                target=target,
+                status=SwitchStatus.REJECTED,
+                reason="Media-source switch target requires a media URI.",
+            )
+
+        try:
+            self.scene_controller.set_media_source(
+                self.media_source_name,
+                target.media_uri,
+            )
+            self.scene_controller.set_scene(target.scene_name)
+        except Exception as exc:
+            raise OutputSwitchError(
+                "Media-source switch failed for "
+                f"{target.scene_name} via {self.media_source_name}: {exc}"
+            ) from exc
+
+        return SwitchResult(
+            target=target,
+            status=SwitchStatus.APPLIED,
+            switched_at_seconds=self.clock(),
+            reason=(
+                f"Media source {self.media_source_name} set and scene switched "
+                f"to {target.scene_name}."
+            ),
+        )
+
+
 class BufferBackedSwitcher:
     """Resolve buffered clips before applying an output switch target."""
 

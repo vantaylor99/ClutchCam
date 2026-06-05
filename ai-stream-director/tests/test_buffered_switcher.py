@@ -13,6 +13,7 @@ from contracts import HypeSignal, LookbackClipRequest, SwitcherTarget  # noqa: E
 from services.buffer import FixtureLookbackBuffer, SegmentRecord  # noqa: E402
 from services.switcher import (  # noqa: E402
     BufferBackedSwitcher,
+    MediaSourceOutputSwitcher,
     OutputSwitchError,
     SceneOutputSwitcher,
     SwitchStatus,
@@ -108,6 +109,63 @@ class BufferBackedSwitcherTests(unittest.TestCase):
         self.assertEqual(result.switched_at_seconds, 200.0)
         self.assertEqual(controller.scenes, [SCENES["player_1"]])
         self.assertIsNotNone(result.target.media_uri)
+
+    def test_ready_clip_can_update_media_source_before_scene_cut(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            buffer = _fixture_buffer(
+                temp_dir,
+                [
+                    ("player_2", "000.ts", 0.0, 2.0),
+                    ("player_2", "001.ts", 2.0, 4.0),
+                ],
+            )
+            controller = RecordingMediaSceneController()
+            target = build_buffered_target(
+                stream_id="player_2",
+                scene_name=SCENES["player_2"],
+                trigger_time_seconds=3.0,
+                pre_roll_seconds=3,
+                post_roll_seconds=1,
+            )
+
+            result = BufferBackedSwitcher(
+                buffer,
+                downstream=MediaSourceOutputSwitcher(
+                    controller,
+                    media_source_name="ClutchCam Buffered Playback",
+                    clock=lambda: 201.0,
+                ),
+            ).switch(target)
+
+        self.assertEqual(result.status, SwitchStatus.APPLIED)
+        self.assertEqual(result.switched_at_seconds, 201.0)
+        self.assertIsNotNone(result.target.media_uri)
+        self.assertEqual(
+            controller.calls,
+            [
+                (
+                    "media",
+                    "ClutchCam Buffered Playback",
+                    result.target.media_uri,
+                ),
+                ("scene", SCENES["player_2"]),
+            ],
+        )
+
+    def test_media_source_switcher_rejects_target_without_media_uri(self) -> None:
+        controller = RecordingMediaSceneController()
+        switcher = MediaSourceOutputSwitcher(
+            controller,
+            media_source_name="ClutchCam Buffered Playback",
+        )
+
+        result = switcher.switch(
+            SwitcherTarget(stream_id="player_1", scene_name=SCENES["player_1"])
+        )
+
+        self.assertEqual(result.status, SwitchStatus.REJECTED)
+        self.assertIn("requires a media URI", result.reason)
+        self.assertEqual(controller.calls, [])
 
     def test_pending_clip_returns_pending_without_downstream_switch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -213,6 +271,17 @@ class RecordingSceneController:
 
     def set_scene(self, scene_name: str) -> None:
         self.scenes.append(scene_name)
+
+
+class RecordingMediaSceneController:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def set_media_source(self, source_name: str, media_uri: str) -> None:
+        self.calls.append(("media", source_name, media_uri))
+
+    def set_scene(self, scene_name: str) -> None:
+        self.calls.append(("scene", scene_name))
 
 
 class FailingSceneController:

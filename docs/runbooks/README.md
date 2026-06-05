@@ -7,6 +7,9 @@ These runbooks cover the current ClutchCam MVP operations path.
 - [Local Linux Compose stack](local-linux-compose.md): bring up local SRS,
   publish player streams, run service smoke checks, and recover common event
   failures.
+- [Linux and cloud deployment topology](linux-cloud-deployment-topology.md):
+  choose host-local, two-Linux-host, or future cloud GPU endpoint layouts while
+  preserving the current service contracts.
 
 Current limits:
 
@@ -14,8 +17,6 @@ Current limits:
 - OBS switching is immediate scene switching against manually prepared scenes.
 - Real OBS buffered media-source playback from resolved lookback clips is not
   implemented yet.
-- The Compose stack has workers and endpoint adapters, but no bundled local
-  Faster-Whisper service profile yet.
 - Full end-to-end live Linux validation with SRS, FFmpeg, transcription, AI, and
   OBS remains future work.
 

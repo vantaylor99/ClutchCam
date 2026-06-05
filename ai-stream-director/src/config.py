@@ -18,12 +18,31 @@ AI_PROVIDER_OLLAMA = "ollama"
 AI_PROVIDER_OPENAI_COMPATIBLE = "openai-compatible"
 SUPPORTED_AI_PROVIDERS = (AI_PROVIDER_OLLAMA, AI_PROVIDER_OPENAI_COMPATIBLE)
 
+TRANSCRIPTION_REQUEST_MODE_JSON = "json"
+TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE = "openai-compatible"
+SUPPORTED_TRANSCRIPTION_REQUEST_MODES = (
+    TRANSCRIPTION_REQUEST_MODE_JSON,
+    TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
+)
+
 _AI_PROVIDER_ALIASES = {
     AI_PROVIDER_OLLAMA: AI_PROVIDER_OLLAMA,
     "ollama-native": AI_PROVIDER_OLLAMA,
     AI_PROVIDER_OPENAI_COMPATIBLE: AI_PROVIDER_OPENAI_COMPATIBLE,
     "openai": AI_PROVIDER_OPENAI_COMPATIBLE,
     "vllm": AI_PROVIDER_OPENAI_COMPATIBLE,
+}
+
+_TRANSCRIPTION_REQUEST_MODE_ALIASES = {
+    TRANSCRIPTION_REQUEST_MODE_JSON: TRANSCRIPTION_REQUEST_MODE_JSON,
+    "json-reference": TRANSCRIPTION_REQUEST_MODE_JSON,
+    "reference": TRANSCRIPTION_REQUEST_MODE_JSON,
+    "transcribe": TRANSCRIPTION_REQUEST_MODE_JSON,
+    TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE: (
+        TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE
+    ),
+    "openai": TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
+    "multipart": TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
 }
 
 
@@ -36,6 +55,11 @@ class AppConfig:
     ai_provider: str
     ingest_api_url: str
     transcription_api_url: str
+    transcription_request_mode: str
+    transcription_endpoint_path: str
+    transcription_model: str
+    transcription_language: str
+    transcription_response_format: str
     transcription_request_timeout_seconds: float
     gemma_api_url: str
     gemma_model: str
@@ -87,6 +111,22 @@ def get_config() -> AppConfig:
         transcription_api_url=os.getenv(
             "TRANSCRIPTION_API_URL",
             "http://faster-whisper:8000",
+        ),
+        transcription_request_mode=normalize_transcription_request_mode(
+            os.getenv(
+                "TRANSCRIPTION_REQUEST_MODE",
+                TRANSCRIPTION_REQUEST_MODE_JSON,
+            )
+        ),
+        transcription_endpoint_path=os.getenv("TRANSCRIPTION_ENDPOINT_PATH", ""),
+        transcription_model=os.getenv(
+            "TRANSCRIPTION_MODEL",
+            os.getenv("FASTER_WHISPER_MODEL", "Systran/faster-whisper-small"),
+        ),
+        transcription_language=os.getenv("TRANSCRIPTION_LANGUAGE", ""),
+        transcription_response_format=os.getenv(
+            "TRANSCRIPTION_RESPONSE_FORMAT",
+            "json",
         ),
         transcription_request_timeout_seconds=float(
             os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS", "30")
@@ -159,6 +199,19 @@ def normalize_ai_provider(value: str) -> str:
     supported = ", ".join(SUPPORTED_AI_PROVIDERS)
     raise ValueError(
         f"Unsupported AI_PROVIDER {value!r}. Expected one of: {supported}."
+    )
+
+
+def normalize_transcription_request_mode(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    request_mode = _TRANSCRIPTION_REQUEST_MODE_ALIASES.get(normalized)
+    if request_mode is not None:
+        return request_mode
+
+    supported = ", ".join(SUPPORTED_TRANSCRIPTION_REQUEST_MODES)
+    raise ValueError(
+        "Unsupported TRANSCRIPTION_REQUEST_MODE "
+        f"{value!r}. Expected one of: {supported}."
     )
 
 

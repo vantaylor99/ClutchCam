@@ -73,8 +73,11 @@ containers, or network connections.
 
 Production defaults remain environment-driven through `config.py`, including
 `AI_PROVIDER`, `INGEST_API_URL`, `TRANSCRIPTION_API_URL`,
-`TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`, `GEMMA_API_URL`, `GEMMA_MODEL`,
-optional `GEMMA_API_KEY`, `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
+`TRANSCRIPTION_REQUEST_MODE`, `TRANSCRIPTION_ENDPOINT_PATH`,
+`TRANSCRIPTION_MODEL`, `TRANSCRIPTION_LANGUAGE`,
+`TRANSCRIPTION_RESPONSE_FORMAT`, `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`,
+`GEMMA_API_URL`, `GEMMA_MODEL`, optional `GEMMA_API_KEY`,
+`LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
@@ -125,10 +128,13 @@ The current `services.transcription` module defines audio input references,
 transcriber/extractor protocols, fixture extraction, and an FFmpeg audio
 extractor that can build and manage per-stream audio chunk workers. It also
 includes a Faster-Whisper-compatible HTTP adapter that sends extracted audio
-URIs to `<TRANSCRIPTION_API_URL>/transcribe`, normalizes common segment
-response shapes, shifts chunk-relative timestamps, and emits `TranscriptEvent`
-objects. The terminal MVP does not yet start the extractor or transcriber at
-runtime, but the orchestrator now exposes an import-safe
+URIs to `<TRANSCRIPTION_API_URL>/transcribe` by default, or uploads local
+extracted audio chunks to `<TRANSCRIPTION_API_URL>/v1/audio/transcriptions`
+when `TRANSCRIPTION_REQUEST_MODE=openai-compatible`. It normalizes common text
+and segment response shapes, shifts chunk-relative timestamps, uses audio chunk
+duration when text-only responses omit segment timestamps, and emits
+`TranscriptEvent` objects. The terminal MVP does not yet start the extractor or
+transcriber at runtime, but the orchestrator now exposes an import-safe
 `RuntimeTranscriptEventHandler` boundary
 that can be used as a normalized event sink. Runtime events are routed through
 `TranscriptRouter.add_event(...)`, preserving stream IDs and media end
@@ -140,9 +146,8 @@ behind the `local-transcription` profile. The documented default image is
 model, inference device, compute type, worker count, TTL, and Hugging Face cache
 mount. That server's direct API is OpenAI-compatible
 `POST /v1/audio/transcriptions`; the app-facing boundary remains
-`TRANSCRIPTION_API_URL`, and the worker should only target services that expose
-the current `/transcribe` JSON contract until the adapter is extended for
-OpenAI-style multipart uploads.
+`TRANSCRIPTION_API_URL`, with `TRANSCRIPTION_REQUEST_MODE=openai-compatible`
+selecting OpenAI-style multipart uploads.
 
 ### AI Orchestration
 
@@ -168,13 +173,13 @@ buffered playback for production. A positive trigger should map to a
 The current `services.switcher` module keeps immediate scene changes and
 buffered clip resolution behind one output-switching protocol. It can resolve a
 buffered target to a ready media URI, return pending/rejected states, and pass
-ready targets to a downstream scene switcher. The runtime transcript handler can
-build a buffered `SwitcherTarget` from an accepted `HypeSignal` and, when an
-output switcher is injected, pass that target through the buffered switching
-boundary. The OBS-specific media-source adapter is still a follow-up: it must
-set or preload a media source from the ready URI, wait for that source to be
-playable, and then perform the program cut without breaking manual override,
-cooldown, and return-to-quad behavior.
+ready targets to a downstream scene switcher or media-source switcher. The
+runtime transcript handler can build a buffered `SwitcherTarget` from an
+accepted `HypeSignal` and, when an output switcher is injected, pass that target
+through the buffered switching boundary. The OBS media-source path updates a
+known OBS Media Source from the ready URI, reads the input settings back to
+surface source/update failures before the cut, and then switches the program
+scene without changing manual override, cooldown, and return-to-quad behavior.
 
 ## Core Contracts
 
@@ -216,11 +221,26 @@ cloud GPU inference should all be selected by environment variables:
 - `GEMMA_MODEL`
 - `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
+- `TRANSCRIPTION_REQUEST_MODE`
+- `TRANSCRIPTION_ENDPOINT_PATH`
+- `TRANSCRIPTION_MODEL`
+- `TRANSCRIPTION_LANGUAGE`
+- `TRANSCRIPTION_RESPONSE_FORMAT`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
 - `INGEST_API_URL`
 
 `OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain accepted compatibility aliases for
 the current MVP.
+
+Deployment topology is local-first. The media server, rolling lookback buffer,
+audio extraction workers, orchestrator, and OBS/PyVMIX control should stay on
+the event host by default because they depend on LAN ingest, RAM-backed media
+paths, and low-latency operator recovery. AI and transcription are the movable
+boundaries: they may run host-local, on a second Linux GPU host, or on future
+cloud GPU/VM endpoints as long as `GEMMA_API_URL` and `TRANSCRIPTION_API_URL`
+keep the same HTTP contracts. See
+`docs/runbooks/linux-cloud-deployment-topology.md` for bind-address, firewall,
+RAM-backed storage, GPU runtime, and secrets guidance.
 
 Provider examples:
 
@@ -247,9 +267,11 @@ Transcription endpoint examples:
 ```text
 # Host-local Faster-Whisper-compatible adapter from Compose.
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000
+TRANSCRIPTION_REQUEST_MODE=json
 
-# Optional Compose-network transcription service or adapter.
+# Optional Compose-network OpenAI-compatible transcription service.
 TRANSCRIPTION_API_URL=http://faster-whisper:8000
+TRANSCRIPTION_REQUEST_MODE=openai-compatible
 
 # Remote/cloud speech-to-text endpoint.
 TRANSCRIPTION_API_URL=https://stt-gpu.example.internal
@@ -261,8 +283,10 @@ TRANSCRIPTION_API_URL=https://stt-gpu.example.internal
    into runtime workers.
 2. Connect the audio extraction and Faster-Whisper worker process to the
    orchestrator's normalized runtime transcript event handler.
-3. Add the OBS/PyVMIX media-source adapter that consumes resolved buffered
-   media URIs and cuts to `trigger_time - pre_roll`.
+3. Wire the OBS media-source adapter into the production runtime path and
+   validate resolved buffered clip playback against live OBS.
+4. Add a PyVMIX media-source adapter if vMix becomes part of the target
+   switching stack.
 
 See `docs/ROADMAP.md` for the staged implementation plan and `tickets/` for
 the executable Tess backlog.

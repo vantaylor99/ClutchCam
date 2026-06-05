@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +9,10 @@ from unittest.mock import patch
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from config import get_config  # noqa: E402
+from config import (  # noqa: E402
+    TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
+    get_config,
+)
 from contracts import TranscriptEvent  # noqa: E402
 from services.transcription import (  # noqa: E402
     AudioInputRef,
@@ -24,10 +28,12 @@ class FakeResponse:
         payload,
         error: Exception | None = None,
         json_error: Exception | None = None,
+        text: str = "",
     ) -> None:
         self.payload = payload
         self.error = error
         self.json_error = json_error
+        self.text = text
 
     def raise_for_status(self) -> None:
         if self.error is not None:
@@ -49,6 +55,41 @@ class FasterWhisperTranscriberTests(unittest.TestCase):
             config = get_config()
 
         self.assertEqual(config.transcription_request_timeout_seconds, 12.5)
+
+    def test_app_config_exposes_openai_compatible_transcription_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPTION_REQUEST_MODE": "openai",
+                "TRANSCRIPTION_ENDPOINT_PATH": "/custom/audio/transcriptions",
+                "TRANSCRIPTION_MODEL": "local-whisper",
+                "TRANSCRIPTION_LANGUAGE": "en",
+                "TRANSCRIPTION_RESPONSE_FORMAT": "verbose_json",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(
+            config.transcription_request_mode,
+            TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
+        )
+        self.assertEqual(
+            config.transcription_endpoint_path,
+            "/custom/audio/transcriptions",
+        )
+        self.assertEqual(config.transcription_model, "local-whisper")
+        self.assertEqual(config.transcription_language, "en")
+        self.assertEqual(config.transcription_response_format, "verbose_json")
+
+    def test_invalid_transcription_request_mode_fails_clearly(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIPTION_REQUEST_MODE": "mystery"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "TRANSCRIPTION_REQUEST_MODE"):
+                get_config()
 
     def test_transcribes_segments_and_shifts_chunk_relative_timestamps(self) -> None:
         calls = []
@@ -122,6 +163,168 @@ class FasterWhisperTranscriberTests(unittest.TestCase):
                 ),
             ),
         )
+
+    def test_openai_compatible_uploads_local_file_without_auth(self) -> None:
+        calls = []
+
+        def post(url, **kwargs):
+            file_name, file_obj = kwargs["files"]["file"]
+            calls.append(
+                {
+                    "url": url,
+                    "timeout": kwargs["timeout"],
+                    "data": dict(kwargs["data"]),
+                    "file_name": file_name,
+                    "file_bytes": file_obj.read(),
+                    "has_json": "json" in kwargs,
+                    "has_headers": "headers" in kwargs,
+                }
+            )
+            return FakeResponse({"text": "rare fish", "start": 0, "end": 2})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "chunk.wav"
+            audio_path.write_bytes(b"wav-data")
+            events = FasterWhisperTranscriber(
+                "http://whisper:8000",
+                timeout_seconds=8,
+                request_mode="openai-compatible",
+                model="Systran/faster-whisper-small",
+                language="en",
+                response_format="json",
+                post=post,
+            ).transcribe(
+                AudioInputRef(
+                    stream_id="player_1",
+                    uri=audio_path.as_uri(),
+                    starts_at_seconds=25,
+                    duration_seconds=5,
+                )
+            )
+
+        self.assertEqual(
+            calls[0]["url"],
+            "http://whisper:8000/v1/audio/transcriptions",
+        )
+        self.assertEqual(calls[0]["timeout"], 8.0)
+        self.assertEqual(calls[0]["data"]["model"], "Systran/faster-whisper-small")
+        self.assertEqual(calls[0]["data"]["language"], "en")
+        self.assertEqual(calls[0]["data"]["response_format"], "json")
+        self.assertEqual(calls[0]["file_name"], "chunk.wav")
+        self.assertEqual(calls[0]["file_bytes"], b"wav-data")
+        self.assertFalse(calls[0]["has_json"])
+        self.assertFalse(calls[0]["has_headers"])
+        self.assertEqual(events[0].stream_id, "player_1")
+        self.assertEqual(events[0].start_time_seconds, 25.0)
+        self.assertEqual(events[0].end_time_seconds, 27.0)
+
+    def test_openai_compatible_text_response_uses_audio_ref_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "chunk.wav"
+            audio_path.write_bytes(b"wav-data")
+            transcriber = FasterWhisperTranscriber(
+                "http://whisper:8000",
+                request_mode="openai-compatible",
+                response_format="text",
+                post=lambda *args, **kwargs: FakeResponse(None, text="  rare fish  "),
+            )
+
+            events = transcriber.transcribe(
+                AudioInputRef(
+                    stream_id="player_2",
+                    uri=str(audio_path),
+                    starts_at_seconds=40.0,
+                    duration_seconds=5.0,
+                )
+            )
+
+        self.assertEqual(
+            events,
+            (
+                TranscriptEvent(
+                    stream_id="player_2",
+                    text="rare fish",
+                    start_time_seconds=40.0,
+                    end_time_seconds=45.0,
+                    is_final=True,
+                ),
+            ),
+        )
+
+    def test_openai_compatible_verbose_segments_preserve_chunk_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / "chunk.wav"
+            audio_path.write_bytes(b"wav-data")
+            transcriber = FasterWhisperTranscriber(
+                "http://whisper:8000",
+                request_mode="openai-compatible",
+                response_format="verbose_json",
+                post=lambda *args, **kwargs: FakeResponse(
+                    {
+                        "text": "ignored aggregate",
+                        "segments": [
+                            {"text": "first", "start": 0.5, "end": 1.0},
+                            {"text": "second", "start": 1.0, "end": 2.0},
+                        ],
+                    }
+                ),
+            )
+
+            events = transcriber.transcribe(
+                AudioInputRef(
+                    stream_id="player_4",
+                    uri=audio_path.as_uri(),
+                    starts_at_seconds=10.0,
+                    duration_seconds=5.0,
+                )
+            )
+
+        self.assertEqual([event.text for event in events], ["first", "second"])
+        self.assertEqual(events[0].start_time_seconds, 10.5)
+        self.assertEqual(events[1].end_time_seconds, 12.0)
+
+    def test_openai_compatible_rejects_remote_audio_ref(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            request_mode="openai-compatible",
+            post=lambda *args, **kwargs: FakeResponse({}),
+        )
+
+        with self.assertRaisesRegex(TranscriptionError, "local file path"):
+            transcriber.transcribe(
+                AudioInputRef(
+                    stream_id="player_1",
+                    uri="https://media.example/chunk.wav",
+                    duration_seconds=5,
+                )
+            )
+
+    def test_openai_compatible_rejects_missing_audio_file(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            request_mode="openai-compatible",
+            post=lambda *args, **kwargs: FakeResponse({}),
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = Path(tmpdir) / "missing.wav"
+            with self.assertRaisesRegex(TranscriptionError, "not readable"):
+                transcriber.transcribe(
+                    AudioInputRef(
+                        stream_id="player_1",
+                        uri=str(missing_path),
+                        duration_seconds=5,
+                    )
+                )
+
+    def test_text_response_without_duration_fails_clearly(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            post=lambda *args, **kwargs: FakeResponse({"text": "no timestamps"}),
+        )
+
+        with self.assertRaisesRegex(TranscriptionError, "audio duration"):
+            transcriber.transcribe(AudioInputRef(stream_id="player_1", uri="x"))
 
     def test_request_failures_surface_as_transcription_errors(self) -> None:
         transcriber = FasterWhisperTranscriber(

@@ -199,6 +199,34 @@ class DryRunOBSControllerTests(unittest.TestCase):
         controller.set_scene(SCENES["player_1"])
         self.assertEqual(controller.get_current_scene(), SCENES["player_1"])
 
+    def test_dry_run_media_source_requires_connect(self) -> None:
+        controller = DryRunOBSController(initial_scene=SCENES["quad"])
+
+        with self.assertRaises(RuntimeError):
+            controller.set_media_source(
+                "ClutchCam Buffered Playback",
+                "file:///buffer/player_1/clip.m3u8",
+            )
+
+    def test_dry_run_media_source_logs_without_obs(self) -> None:
+        output = io.StringIO()
+        controller = DryRunOBSController(
+            initial_scene=SCENES["quad"],
+            log=lambda message: print(message, file=output),
+        )
+
+        controller.connect()
+        controller.set_media_source(
+            "ClutchCam Buffered Playback",
+            "file:///buffer/player_1/clip.m3u8",
+        )
+
+        self.assertIn(
+            "[DRY RUN OBS] Media source ClutchCam Buffered Playback set to: "
+            "file:///buffer/player_1/clip.m3u8",
+            output.getvalue(),
+        )
+
 
 class OBSControllerSceneListTests(unittest.TestCase):
     def test_connect_explains_missing_obsws_python_in_real_mode(self) -> None:
@@ -232,6 +260,88 @@ class OBSControllerSceneListTests(unittest.TestCase):
             controller.list_scenes(),
             [SCENES["quad"], SCENES["player_1"]],
         )
+
+    def test_set_media_source_updates_file_uri_input_settings(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        response = Mock()
+        response.input_settings = {
+            "is_local_file": True,
+            "local_file": "C:\\buffer\\player_2\\clip.m3u8",
+            "restart_on_activate": True,
+        }
+        controller.client.get_input_settings.return_value = response
+
+        controller.set_media_source(
+            "ClutchCam Buffered Playback",
+            "file:///C:/buffer/player_2/clip.m3u8",
+        )
+
+        controller.client.set_input_settings.assert_called_once_with(
+            input_name="ClutchCam Buffered Playback",
+            input_settings={
+                "is_local_file": True,
+                "local_file": "C:\\buffer\\player_2\\clip.m3u8",
+                "restart_on_activate": True,
+            },
+            overlay=True,
+        )
+        controller.client.get_input_settings.assert_called_once_with(
+            input_name="ClutchCam Buffered Playback",
+        )
+
+    def test_set_media_source_updates_url_input_settings(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        response = Mock()
+        response.input_settings = {
+            "is_local_file": False,
+            "input": "http://media.example/clip.m3u8",
+            "restart_on_activate": True,
+        }
+        controller.client.get_input_settings.return_value = response
+
+        controller.set_media_source(
+            "ClutchCam Buffered Playback",
+            "http://media.example/clip.m3u8",
+        )
+
+        controller.client.set_input_settings.assert_called_once_with(
+            input_name="ClutchCam Buffered Playback",
+            input_settings={
+                "is_local_file": False,
+                "input": "http://media.example/clip.m3u8",
+                "restart_on_activate": True,
+            },
+            overlay=True,
+        )
+
+    def test_set_media_source_fails_when_readback_does_not_match(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        response = Mock()
+        response.input_settings = {
+            "is_local_file": False,
+            "input": "http://media.example/other.m3u8",
+        }
+        controller.client.get_input_settings.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, "did not match"):
+            controller.set_media_source(
+                "ClutchCam Buffered Playback",
+                "http://media.example/clip.m3u8",
+            )
+
+    def test_set_media_source_fails_when_readback_is_missing(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        controller.client.get_input_settings.return_value = object()
+
+        with self.assertRaisesRegex(RuntimeError, "could not be read back"):
+            controller.set_media_source(
+                "ClutchCam Buffered Playback",
+                "http://media.example/clip.m3u8",
+            )
 
 
 class OBSSceneValidationTests(unittest.TestCase):

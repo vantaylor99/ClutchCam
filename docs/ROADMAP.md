@@ -60,8 +60,9 @@ Deliverables:
 - Audio extraction per stream. First FFmpeg command/scaffolding implementation
   exists behind `services.transcription`; runtime wiring is still pending.
 - Faster-Whisper API adapter configured by `TRANSCRIPTION_API_URL`. First HTTP
-  adapter implementation exists behind `services.transcription`; runtime wiring
-  is still pending.
+  adapter implementation exists behind `services.transcription`, including the
+  default JSON-reference mode and opt-in OpenAI-compatible multipart uploads;
+  runtime wiring is still pending.
 - `TranscriptEvent` ingestion path. `TranscriptRouter.add_event(...)` exists so
   runtime code can feed normalized events without changing the terminal MVP
   input path.
@@ -100,7 +101,9 @@ only switching live.
 Deliverables:
 
 - Buffer clip resolution and a buffer-backed switch target boundary.
-- OBS media-source playback path that consumes resolved buffered media.
+- OBS media-source playback path that consumes resolved buffered media. The
+  adapter is implemented; runtime configuration/injection and live OBS
+  validation remain pending.
 - Switcher interface that can later support PyVMIX.
 - Manual operator override preserved.
 - Cooldown, focus duration, and return-to-quad behavior preserved.
@@ -143,10 +146,10 @@ Success criteria:
 - AI and transcription endpoints fail with clear operator guidance when they are
   not configured.
 
-Current status: the checkpoint runner, runtime healthcheck entrypoints, and AI
-readiness diagnostics are implemented. The remaining checkpoint gap is the
-opt-in generated-ingest Compose validation that proves SRS, FFmpeg, and the
-lookback resolver together on a local Linux host.
+Current status: the checkpoint runner, runtime healthcheck entrypoints, AI
+readiness diagnostics, and opt-in generated-ingest Compose checkpoint are
+implemented. The remaining checkpoint gap is running the generated-ingest
+validation on a Linux host with Docker and FFmpeg.
 
 ## Phase 6 - Production Operations
 
@@ -169,11 +172,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/29-obs-buffered-media-source-adapter.md`
-- `tickets/implement/36-linux-cloud-deployment-topology-runbook.md`
-- `tickets/implement/39-openai-compatible-transcription-adapter.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -212,12 +211,15 @@ Completed review tickets:
 - `tickets/complete/26-local-linux-compose-profiles.md`
 - `tickets/complete/27-local-stack-smoke-entrypoints.md`
 - `tickets/complete/28-health-check-primitives.md`
+- `tickets/complete/29-obs-buffered-media-source-adapter.md`
 - `tickets/complete/30-runtime-event-pipeline-wiring.md`
 - `tickets/complete/31-faster-whisper-compose-profile.md`
 - `tickets/complete/32-runtime-healthcheck-entrypoints.md`
 - `tickets/complete/33-local-checkpoint-smoke-runner.md`
 - `tickets/complete/34-compose-generated-ingest-checkpoint.md`
 - `tickets/complete/35-local-ai-model-readiness-checkpoint.md`
+- `tickets/complete/36-linux-cloud-deployment-topology-runbook.md`
+- `tickets/complete/39-openai-compatible-transcription-adapter.md`
 
 Backlog tickets:
 

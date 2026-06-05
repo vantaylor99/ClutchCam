@@ -7,8 +7,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
-from config import AppConfig, STREAM_IDS
+from config import (
+    AppConfig,
+    STREAM_IDS,
+    TRANSCRIPTION_REQUEST_MODE_JSON,
+    TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
+)
 from contracts import TranscriptEvent
 
 
@@ -109,12 +116,23 @@ class FasterWhisperTranscriber:
         self,
         api_url: str,
         timeout_seconds: float = 30,
-        endpoint_path: str = "/transcribe",
+        request_mode: str = TRANSCRIPTION_REQUEST_MODE_JSON,
+        endpoint_path: str | None = None,
+        model: str = "Systran/faster-whisper-small",
+        language: str = "",
+        response_format: str = "json",
         post: Callable[..., Any] | None = None,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.timeout_seconds = float(timeout_seconds)
-        self.endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+        self.request_mode = request_mode
+        self.endpoint_path = _normalize_endpoint_path(
+            endpoint_path,
+            request_mode=request_mode,
+        )
+        self.model = model
+        self.language = language
+        self.response_format = response_format
         self._post = post
 
     @classmethod
@@ -122,6 +140,11 @@ class FasterWhisperTranscriber:
         return cls(
             api_url=app_config.transcription_api_url,
             timeout_seconds=app_config.transcription_request_timeout_seconds,
+            request_mode=app_config.transcription_request_mode,
+            endpoint_path=app_config.transcription_endpoint_path or None,
+            model=app_config.transcription_model,
+            language=app_config.transcription_language,
+            response_format=app_config.transcription_response_format,
         )
 
     def transcribe(self, audio: AudioInputRef) -> tuple[TranscriptEvent, ...]:
@@ -129,6 +152,14 @@ class FasterWhisperTranscriber:
         return tuple(_events_from_payload(payload, audio))
 
     def _request_payload(self, audio: AudioInputRef) -> Any:
+        if self.request_mode == TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE:
+            return self._request_openai_compatible_payload(audio)
+
+        if self.request_mode != TRANSCRIPTION_REQUEST_MODE_JSON:
+            raise TranscriptionError(
+                f"Unsupported transcription request mode: {self.request_mode}"
+            )
+
         request_payload = {
             "stream_id": audio.stream_id,
             "audio_uri": audio.uri,
@@ -147,6 +178,32 @@ class FasterWhisperTranscriber:
             )
             response.raise_for_status()
             return response.json()
+        except Exception as exc:
+            raise TranscriptionError(f"Transcription request failed: {exc}") from exc
+
+    def _request_openai_compatible_payload(self, audio: AudioInputRef) -> Any:
+        audio_path = _local_audio_path(audio.uri)
+        data = {
+            "model": self.model,
+            "response_format": self.response_format,
+        }
+        if self.language:
+            data["language"] = self.language
+
+        try:
+            with audio_path.open("rb") as audio_file:
+                response = self._post_json(
+                    f"{self.api_url}{self.endpoint_path}",
+                    data=data,
+                    files={"file": (audio_path.name, audio_file)},
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                if self.response_format.strip().lower() == "text":
+                    return {"text": str(getattr(response, "text", ""))}
+                return response.json()
+        except TranscriptionError:
+            raise
         except Exception as exc:
             raise TranscriptionError(f"Transcription request failed: {exc}") from exc
 
@@ -349,13 +406,23 @@ def _ensure_known_stream(config: AudioExtractionConfig, stream_id: str) -> None:
         raise TranscriptionError(f"Unknown stream ID: {stream_id}")
 
 
-def _events_from_payload(payload: Any, audio: AudioInputRef) -> tuple[TranscriptEvent, ...]:
+def _events_from_payload(
+    payload: Any,
+    audio: AudioInputRef,
+) -> tuple[TranscriptEvent, ...]:
     segments = _segments_from_payload(payload)
     events: list[TranscriptEvent] = []
     offset = audio.starts_at_seconds or 0.0
 
     for segment in segments:
-        events.append(_event_from_segment(segment, audio.stream_id, offset))
+        events.append(
+            _event_from_segment(
+                segment,
+                audio.stream_id,
+                offset,
+                duration_seconds=audio.duration_seconds,
+            )
+        )
 
     return tuple(events)
 
@@ -386,13 +453,24 @@ def _event_from_segment(
     segment: dict[str, Any],
     stream_id: str,
     offset_seconds: float,
+    duration_seconds: float | None = None,
 ) -> TranscriptEvent:
     text = str(segment.get("text", "")).strip()
     if not text:
         raise TranscriptionError("Transcription segment text is missing.")
 
-    start = _segment_time(segment, "start", "start_seconds")
-    end = _segment_time(segment, "end", "end_seconds")
+    start = _segment_time_or_none(segment, "start", "start_seconds")
+    end = _segment_time_or_none(segment, "end", "end_seconds")
+    if start is None and end is None:
+        if duration_seconds is None:
+            raise TranscriptionError(
+                "Transcription segment is missing timestamps and audio duration."
+            )
+        start = 0.0
+        end = float(duration_seconds)
+    elif start is None or end is None:
+        raise TranscriptionError("Transcription segment has incomplete timestamps.")
+
     if end <= start:
         raise TranscriptionError("Transcription segment end must be after start.")
 
@@ -407,6 +485,13 @@ def _event_from_segment(
 
 
 def _segment_time(segment: dict[str, Any], *names: str) -> float:
+    value = _segment_time_or_none(segment, *names)
+    if value is None:
+        raise TranscriptionError(f"Transcription segment is missing {names[0]}.")
+    return value
+
+
+def _segment_time_or_none(segment: dict[str, Any], *names: str) -> float | None:
     for name in names:
         if name not in segment:
             continue
@@ -417,7 +502,56 @@ def _segment_time(segment: dict[str, Any], *names: str) -> float:
                 f"Transcription segment {name} must be numeric."
             ) from exc
 
-    raise TranscriptionError(f"Transcription segment is missing {names[0]}.")
+    return None
+
+
+def _normalize_endpoint_path(
+    endpoint_path: str | None,
+    *,
+    request_mode: str,
+) -> str:
+    if endpoint_path:
+        return endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+    if request_mode == TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE:
+        return "/v1/audio/transcriptions"
+    return "/transcribe"
+
+
+def _local_audio_path(uri: str) -> Path:
+    parsed = urlparse(uri)
+    windows_drive_path = len(parsed.scheme) == 1 and bool(Path(uri).drive)
+    if parsed.scheme in ("http", "https", "rtmp", "rtsp", "srt"):
+        raise TranscriptionError(
+            "OpenAI-compatible transcription upload requires a local file path "
+            f"or file:// URI, not remote URI: {uri}"
+        )
+    if parsed.scheme and parsed.scheme != "file" and not windows_drive_path:
+        raise TranscriptionError(
+            "OpenAI-compatible transcription upload requires a local file path "
+            f"or file:// URI, not URI scheme {parsed.scheme!r}."
+        )
+
+    if parsed.scheme == "file":
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            raise TranscriptionError(
+                "OpenAI-compatible transcription upload requires a local file:// URI."
+            )
+        path = Path(url2pathname(unquote(parsed.path)))
+    else:
+        path = Path(uri)
+
+    try:
+        resolved = path.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise TranscriptionError(
+            f"OpenAI-compatible transcription audio is not readable: {uri}"
+        ) from exc
+
+    if not resolved.is_file():
+        raise TranscriptionError(
+            f"OpenAI-compatible transcription audio is not a file: {resolved}"
+        )
+    return resolved
 
 
 def _format_seconds(value: float) -> str:

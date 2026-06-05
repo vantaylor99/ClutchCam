@@ -98,6 +98,9 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
                     "LOOKBACK_INPUT_URL_PLAYER_2": "srt://lookback-two",
                     "AUDIO_INPUT_URL_PLAYER_3": "rtmp://audio-three",
                     "TRANSCRIPTION_API_URL": "http://whisper-local:9000",
+                    "TRANSCRIPTION_REQUEST_MODE": "openai-compatible",
+                    "TRANSCRIPTION_MODEL": "local-whisper",
+                    "TRANSCRIPTION_RESPONSE_FORMAT": "verbose_json",
                     "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS": "4.5",
                 },
                 clear=True,
@@ -116,6 +119,13 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(config.stream_input_urls["player_3"], "rtmp://audio-three")
         self.assertEqual(worker.transcriber.api_url, "http://whisper-local:9000")
         self.assertEqual(worker.transcriber.timeout_seconds, 4.5)
+        self.assertEqual(worker.transcriber.request_mode, "openai-compatible")
+        self.assertEqual(
+            worker.transcriber.endpoint_path,
+            "/v1/audio/transcriptions",
+        )
+        self.assertEqual(worker.transcriber.model, "local-whisper")
+        self.assertEqual(worker.transcriber.response_format, "verbose_json")
         self.assertIs(worker.stop_event, stop_event)
 
     def test_completed_chunk_discovery_deduplicates_processed_chunks(self) -> None:

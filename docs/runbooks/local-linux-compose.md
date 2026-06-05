@@ -3,7 +3,8 @@
 Use this path on a Linux host when validating the local media-server, buffer,
 transcription adapter, AI endpoint, and dry-run orchestrator boundaries. The
 stack is useful for event rehearsal, but full live Linux validation across SRS,
-FFmpeg, transcription, AI, and OBS is still future work.
+FFmpeg, transcription, AI, and real OBS playback still needs to be run on
+event hardware.
 
 ## What This Runs
 
@@ -20,14 +21,17 @@ The Compose stack currently provides:
 The local Faster-Whisper server is opt-in through the `local-transcription`
 profile and is not part of the default local Linux runtime. Keep
 `TRANSCRIPTION_API_URL` as the app-facing contract; point it at a local Compose
-service, a host service, or a remote service that matches the current
-`/transcribe` JSON adapter contract. The bundled `faster-whisper` service uses
-the OpenAI-compatible `fedirz/faster-whisper-server` image, whose direct upload
-endpoint is `/v1/audio/transcriptions`.
+service, a host service, or a remote service, then choose
+`TRANSCRIPTION_REQUEST_MODE=json` for the default `/transcribe` JSON-reference
+contract or `TRANSCRIPTION_REQUEST_MODE=openai-compatible` for multipart
+uploads to `/v1/audio/transcriptions`. The bundled `faster-whisper` service
+uses the OpenAI-compatible `fedirz/faster-whisper-server` image.
 
-Real OBS buffered media-source playback is not implemented yet. The switcher can
-resolve buffered clip URIs behind service boundaries, but the OBS adapter still
-switches existing scenes immediately.
+The OBS buffered media-source adapter is implemented behind the switcher
+boundary. It updates a known OBS Media Source from a resolved clip URI before
+cutting to the target scene. The default terminal MVP path still switches
+existing scenes immediately unless a runtime caller injects that media-source
+switcher.
 
 ## Host Setup
 
@@ -107,8 +111,9 @@ FASTER_WHISPER_COMPUTE_TYPE=float16
 FASTER_WHISPER_DEVICE_INDEX=0
 ```
 
-Start the transcription worker only when `TRANSCRIPTION_API_URL` points at a
-reachable Faster-Whisper-compatible API:
+Start the transcription worker in the default JSON-reference mode only when
+`TRANSCRIPTION_API_URL` points at a reachable service or adapter exposing
+`/transcribe`:
 
 ```bash
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
@@ -126,9 +131,18 @@ COMPOSE_PROFILES=media-server,transcription-worker,local-transcription \
 docker compose up -d --build transcription-worker faster-whisper
 ```
 
-For the stock OpenAI-compatible `faster-whisper` server, validate direct uploads
-against `/v1/audio/transcriptions` until the runtime adapter supports that
-request shape:
+For the stock OpenAI-compatible `faster-whisper` server, opt the worker into
+multipart uploads:
+
+```bash
+TRANSCRIPTION_API_URL=http://faster-whisper:8000 \
+TRANSCRIPTION_REQUEST_MODE=openai-compatible \
+TRANSCRIPTION_RESPONSE_FORMAT=json \
+COMPOSE_PROFILES=media-server,transcription-worker,local-transcription \
+docker compose up -d --build transcription-worker faster-whisper
+```
+
+Direct upload check:
 
 ```bash
 curl http://127.0.0.1:8000/v1/audio/transcriptions \
@@ -229,15 +243,19 @@ Create these scenes manually in OBS, with exact names:
 - `Player 3 Fullscreen`
 - `Player 4 Fullscreen`
 
-The current orchestrator only switches between these existing scenes. Build the
-scene contents yourself using the capture, network playback, or media sources
-that match your event setup. For SRS preview sources, the host URLs above are
-the stable starting point, especially
+The current terminal orchestrator switches between these existing scenes. Build
+the scene contents yourself using the capture, network playback, or media
+sources that match your event setup. For SRS preview sources, the host URLs
+above are the stable starting point, especially
 `http://<linux-host-lan-ip>:8080/live/player_N.flv` or
 `rtmp://<linux-host-lan-ip>:1935/live/player_N`.
 
-Do not expect the app to create scenes, create sources, or update a media source
-to a buffered clip. The OBS buffered media-source adapter is still future work.
+Do not expect the app to create scenes or create sources. For buffered playback,
+create one Media Source that is present in the target scenes and name it
+consistently, for example `ClutchCam Buffered Playback`. The media-source
+adapter can update that existing source when given a resolved `media_uri`.
+File-backed clip URIs must be reachable from the machine running OBS at the
+same path; URL-backed clips must be reachable from OBS over the network.
 
 ## Smoke Tests
 
@@ -320,7 +338,9 @@ python scripts/smoke_transcription_api.py
 ```
 
 This script posts to `<TRANSCRIPTION_API_URL>/transcribe` and does not require
-Docker, GPUs, or a networked service when imported by the unit suite.
+Docker, GPUs, or a networked service when imported by the unit suite. Use the
+OpenAI-compatible worker mode above for the stock local `faster-whisper`
+service.
 
 AI endpoint, local Ollama:
 
@@ -378,9 +398,9 @@ Unavailable transcription service:
   `host.docker.internal` for a host service reached from Compose.
 - For the optional local `faster-whisper` profile, inspect
   `docker compose logs --tail=100 faster-whisper`, confirm the cache volume is
-  writable, and use `/v1/audio/transcriptions` for direct OpenAI-compatible
-  upload checks. Use `/transcribe` only with a service or adapter that exposes
-  ClutchCam's current JSON contract.
+  writable, and set `TRANSCRIPTION_REQUEST_MODE=openai-compatible` for worker
+  uploads to `/v1/audio/transcriptions`. Use `/transcribe` only with a service
+  or adapter that exposes ClutchCam's JSON-reference contract.
 
 Unavailable AI endpoint:
 
@@ -403,9 +423,10 @@ Buffered OBS playback unavailable:
 
 - Symptom: the stack resolves buffer clips but OBS still switches immediately
   to the existing player scene.
-- Recover: this is expected for the current MVP. A future OBS media-source
-  adapter must preload or update the source with the resolved clip URI before
-  cutting program output.
+- Recover: the adapter exists, but the default terminal MVP path is still
+  scene-only. Use a runtime path that injects the media-source switcher, verify
+  the OBS Media Source name, and confirm file or URL clip paths are reachable
+  from the OBS host.
 
 ## Shutdown
 

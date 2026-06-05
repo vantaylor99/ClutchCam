@@ -37,9 +37,8 @@ Faster-Whisper, AI clients, Docker, network calls, or OBS connections.
 
 `src/services/switcher.py` can now turn a stream-focused hype signal into a
 `LookbackClipRequest`, resolve it against a lookback buffer, and expose the
-ready buffered media URI on a `SwitcherTarget`. A later OBS-specific adapter
-still needs to update or preload an OBS media source with that URI before
-performing the program cut.
+ready buffered media URI on a `SwitcherTarget`. The OBS media-source adapter can
+update a known OBS media source with that URI before performing the program cut.
 
 Operator runbooks for event setup, smoke checks, and recovery live in
 `../docs/runbooks/README.md`. Use them for the terminal dry-run MVP and the
@@ -95,6 +94,14 @@ On startup, the app connects to OBS WebSocket and validates that all required
 scenes exist before the scheduler starts. If any scene is missing or misspelled,
 startup exits with a list of the missing scene names. `DRY_RUN_OBS=true` skips
 this real OBS validation for local smoke testing.
+
+For buffered playback, create one OBS Media Source that is present in the
+fullscreen playback scenes you plan to cut to. Use the source name you pass to
+the media-source switcher, for example `ClutchCam Buffered Playback`. The
+adapter updates the source with the resolved clip URI and reads the source
+settings back before cutting to the target scene. File-backed clips must be
+reachable from the machine running OBS at the same path; URL-backed clips are
+applied as network media input.
 
 ## OBS WebSocket Setup
 
@@ -353,21 +360,25 @@ extractor is not started by the terminal MVP yet.
 ## Transcription API Adapter
 
 `src/services/transcription.py` also includes `FasterWhisperTranscriber`, an
-HTTP adapter for Faster-Whisper-compatible services. The current app-facing
+HTTP adapter for Faster-Whisper-compatible services. Its default app-facing
 contract posts extracted audio chunk references as JSON to
-`<TRANSCRIPTION_API_URL>/transcribe`, accepts common segment response shapes,
-shifts chunk-relative timestamps by the audio reference start time, and emits
-normalized `TranscriptEvent` objects.
+`<TRANSCRIPTION_API_URL>/transcribe`. Set
+`TRANSCRIPTION_REQUEST_MODE=openai-compatible` to upload local extracted audio
+chunks as multipart form data to
+`<TRANSCRIPTION_API_URL>/v1/audio/transcriptions`, which matches stock
+OpenAI-compatible Faster-Whisper servers. Both modes accept common text and
+segment response shapes, preserve stream identity, shift chunk-relative
+timestamps by the audio reference start time, and emit normalized
+`TranscriptEvent` objects. Multipart mode can only upload local paths or
+`file://` URIs that the worker can read.
 
 Docker Compose also includes an optional `faster-whisper` service for local
 Faster-Whisper hosting. Its documented default image is
 `fedirz/faster-whisper-server:latest-cpu`, an OpenAI-compatible server whose
 direct transcription API is `POST /v1/audio/transcriptions` with multipart
-audio uploads. Keep `TRANSCRIPTION_API_URL` as the only ClutchCam runtime
-setting: point it at a local Compose service, a host service, or a remote
-endpoint that exposes the current `/transcribe` JSON contract, or use the
-OpenAI-compatible endpoint directly for operator validation until the runtime
-adapter grows that request shape.
+audio uploads. Keep `TRANSCRIPTION_API_URL` as the endpoint root: point it at a
+local Compose service, a host service, or a remote endpoint, then choose the
+request mode that matches that service.
 
 Runtime settings:
 
@@ -375,6 +386,12 @@ Runtime settings:
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000
 # TRANSCRIPTION_API_URL=http://faster-whisper:8000
 # TRANSCRIPTION_API_URL=https://stt-gpu.example.internal
+TRANSCRIPTION_REQUEST_MODE=json
+# TRANSCRIPTION_REQUEST_MODE=openai-compatible
+# TRANSCRIPTION_ENDPOINT_PATH=/v1/audio/transcriptions
+TRANSCRIPTION_MODEL=Systran/faster-whisper-small
+TRANSCRIPTION_LANGUAGE=
+TRANSCRIPTION_RESPONSE_FORMAT=json
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
 ```
 
@@ -517,9 +534,10 @@ Expected result: JSON with `<TRANSCRIPTION_API_URL>/transcribe`, the generated
 fixture audio URI, request timeout, and transcript event count. Set
 `SMOKE_TRANSCRIPTION_AUDIO_URI` to an endpoint-readable fixture when the API
 runs on another machine or container. The smoke script validates the current
-JSON `/transcribe` adapter contract; the stock `fedirz/faster-whisper-server`
-container exposes OpenAI-compatible `/v1/audio/transcriptions` for direct file
-uploads.
+JSON `/transcribe` adapter contract. For the stock
+`fedirz/faster-whisper-server` container, set
+`TRANSCRIPTION_REQUEST_MODE=openai-compatible` in the worker runtime or use the
+direct `/v1/audio/transcriptions` upload check shown above.
 
 Smoke the configured AI endpoint. For Ollama, the smoke verifies that
 `GEMMA_MODEL` appears in `/api/tags`:

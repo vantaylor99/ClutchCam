@@ -46,9 +46,12 @@ The MVP supports:
 - An import-safe `RuntimeTranscriptEventHandler` boundary that routes normalized
   `TranscriptEvent` objects through the router, local prefilter, AI director,
   scheduler gates, and buffered switch target construction.
+- An OBS media-source switcher adapter that can update a known OBS Media Source
+  with a resolved buffered clip URI before cutting to the target scene.
 - Operator runbooks under `docs/runbooks/` for terminal dry-run setup, local
   Linux Compose setup, smoke checks, OBS scene preparation, stream publishing,
-  and recovery from common local event failures.
+  recovery from common local event failures, and Linux/cloud deployment
+  topology.
 
 ## What Is Partially Started
 
@@ -114,13 +117,17 @@ The repo does not yet include:
 
 - A single end-to-end runtime that starts media ingest, FFmpeg buffering, audio
   extraction, transcription, AI orchestration, and switching together.
+- Configuration/runtime wiring that injects the OBS media-source adapter into a
+  full production path by default.
 - A completed live Docker/Linux validation run against real SRS, FFmpeg,
   Faster-Whisper, Ollama, and OBS processes. The opt-in generated-ingest
   checkpoint exists, but still needs to be run on a Linux host with Docker and
   FFmpeg.
-- OBS or PyVMIX media-source playback that consumes a resolved buffered clip URI.
+- PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
-- Production deployment documentation beyond the local-first operator runbooks.
+- Live cloud or multi-host deployment validation. The topology runbook now
+  documents intended host-local, two-Linux-host, and future cloud GPU/VM
+  layouts, but those paths have not been exercised with real remote services.
 
 ## Validation
 

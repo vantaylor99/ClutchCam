@@ -16,6 +16,7 @@ from config import (  # noqa: E402
     AI_PROVIDER_OLLAMA,
     AI_PROVIDER_OPENAI_COMPATIBLE,
     SCENES,
+    TRANSCRIPTION_REQUEST_MODE_JSON,
     AppConfig,
 )
 from services.health import run_runtime_healthcheck  # noqa: E402
@@ -247,6 +248,11 @@ def _app_config(**overrides) -> AppConfig:
         "ai_provider": AI_PROVIDER_OLLAMA,
         "ingest_api_url": "rtmp://media-server:1935/live",
         "transcription_api_url": "http://transcription.example",
+        "transcription_request_mode": TRANSCRIPTION_REQUEST_MODE_JSON,
+        "transcription_endpoint_path": "",
+        "transcription_model": "Systran/faster-whisper-small",
+        "transcription_language": "",
+        "transcription_response_format": "json",
         "transcription_request_timeout_seconds": 30.0,
         "gemma_api_url": "http://ollama:11434",
         "gemma_model": "gemma3:4b",
