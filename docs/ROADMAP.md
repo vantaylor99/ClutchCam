@@ -172,7 +172,10 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
+
+- `tickets/implement/37-latency-budget-and-soak-harness.md`
+- `tickets/implement/38-runtime-config-and-secrets-hardening.md`
 
 Active plan tickets: none.
 
@@ -223,6 +226,4 @@ Completed review tickets:
 
 Backlog tickets:
 
-- `tickets/backlog/37-latency-budget-and-soak-harness.md`
-- `tickets/backlog/38-runtime-config-and-secrets-hardening.md`
 - `tickets/backlog/90-optional-vision-keyframe-analysis.md`
