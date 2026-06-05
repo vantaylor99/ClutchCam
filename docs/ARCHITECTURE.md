@@ -125,9 +125,24 @@ The current `services.transcription` module defines audio input references,
 transcriber/extractor protocols, fixture extraction, and an FFmpeg audio
 extractor that can build and manage per-stream audio chunk workers. It also
 includes a Faster-Whisper-compatible HTTP adapter that sends extracted audio
-URIs to `/transcribe`, normalizes common segment response shapes, shifts
-chunk-relative timestamps, and emits `TranscriptEvent` objects. The terminal
-MVP does not yet start the extractor or transcriber at runtime.
+URIs to `<TRANSCRIPTION_API_URL>/transcribe`, normalizes common segment
+response shapes, shifts chunk-relative timestamps, and emits `TranscriptEvent`
+objects. The terminal MVP does not yet start the extractor or transcriber at
+runtime, but the orchestrator now exposes an import-safe
+`RuntimeTranscriptEventHandler` boundary
+that can be used as a normalized event sink. Runtime events are routed through
+`TranscriptRouter.add_event(...)`, preserving stream IDs and media end
+timestamps before the local trigger prefilter and AI director run.
+
+Docker Compose can optionally start a local service named `faster-whisper`
+behind the `local-transcription` profile. The documented default image is
+`fedirz/faster-whisper-server:latest-cpu`, with an env-overridable CUDA image,
+model, inference device, compute type, worker count, TTL, and Hugging Face cache
+mount. That server's direct API is OpenAI-compatible
+`POST /v1/audio/transcriptions`; the app-facing boundary remains
+`TRANSCRIPTION_API_URL`, and the worker should only target services that expose
+the current `/transcribe` JSON contract until the adapter is extended for
+OpenAI-style multipart uploads.
 
 ### AI Orchestration
 
@@ -153,10 +168,13 @@ buffered playback for production. A positive trigger should map to a
 The current `services.switcher` module keeps immediate scene changes and
 buffered clip resolution behind one output-switching protocol. It can resolve a
 buffered target to a ready media URI, return pending/rejected states, and pass
-ready targets to a downstream scene switcher. The OBS-specific media-source
-adapter is still a follow-up: it must set or preload a media source from the
-ready URI, wait for that source to be playable, and then perform the program
-cut without breaking manual override, cooldown, and return-to-quad behavior.
+ready targets to a downstream scene switcher. The runtime transcript handler can
+build a buffered `SwitcherTarget` from an accepted `HypeSignal` and, when an
+output switcher is injected, pass that target through the buffered switching
+boundary. The OBS-specific media-source adapter is still a follow-up: it must
+set or preload a media source from the ready URI, wait for that source to be
+playable, and then perform the program cut without breaking manual override,
+cooldown, and return-to-quad behavior.
 
 ## Core Contracts
 
@@ -224,14 +242,26 @@ GEMMA_MODEL=gemma-3-4b-it
 GEMMA_API_KEY=<token>
 ```
 
+Transcription endpoint examples:
+
+```text
+# Host-local Faster-Whisper-compatible adapter from Compose.
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000
+
+# Optional Compose-network transcription service or adapter.
+TRANSCRIPTION_API_URL=http://faster-whisper:8000
+
+# Remote/cloud speech-to-text endpoint.
+TRANSCRIPTION_API_URL=https://stt-gpu.example.internal
+```
+
 ## Near-Term Sequence
 
 1. Wire the implemented local media ingest and rolling FFmpeg lookback buffer
    into runtime workers.
-2. Wire audio extraction and the Faster-Whisper adapter into a runtime
-   transcript event path.
-3. Generalize the AI director for OpenAI-compatible Gemma endpoints.
-4. Add the OBS/PyVMIX media-source adapter that consumes resolved buffered
+2. Connect the audio extraction and Faster-Whisper worker process to the
+   orchestrator's normalized runtime transcript event handler.
+3. Add the OBS/PyVMIX media-source adapter that consumes resolved buffered
    media URIs and cuts to `trigger_time - pre_roll`.
 
 See `docs/ROADMAP.md` for the staged implementation plan and `tickets/` for

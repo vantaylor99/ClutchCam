@@ -3,10 +3,12 @@ import sys
 import threading
 import time
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import TextIO
 
-from ai_director import AIDirector, AIDirectorError
+from ai_director import AIDirector, AIDirectorError, DirectorDecision
 from config import SCENES, get_config
+from contracts import HypeSignal, SwitcherTarget, TranscriptEvent
 from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
 from services.ai import (
@@ -15,7 +17,13 @@ from services.ai import (
     TranscriptTriggerPrefilterConfig,
 )
 from services.health import run_runtime_healthcheck
-from transcript_router import TranscriptRouter
+from services.switcher import (
+    OutputSwitchError,
+    OutputSwitcher,
+    SwitchResult,
+    buffered_target_from_signal,
+)
+from transcript_router import TranscriptMessage, TranscriptRouter
 
 
 HELP_TEXT = """
@@ -38,6 +46,56 @@ Manual commands:
 TICK_INTERVAL_SECONDS = 0.25
 INPUT_CLOSED = None
 PROMPT_TEXT = "> "
+
+
+@dataclass(frozen=True)
+class RuntimeTranscriptEventResult:
+    accepted: bool
+    message: TranscriptMessage | None = None
+    candidate_signal: HypeSignal | None = None
+    decision: DirectorDecision | None = None
+    switch_target: SwitcherTarget | None = None
+    switch_result: SwitchResult | None = None
+    ai_evaluation_attempted: bool = False
+    reason: str = ""
+
+
+class RuntimeTranscriptEventHandler:
+    """Callable sink that routes normalized runtime transcript events."""
+
+    def __init__(
+        self,
+        *,
+        transcript_router: TranscriptRouter,
+        ai_director: AIDirector,
+        scheduler: SceneScheduler,
+        trigger_prefilter: TranscriptTriggerPrefilter | None = None,
+        output_switcher: OutputSwitcher | None = None,
+        switch_lookback_seconds: int = 15,
+        log=print,
+    ) -> None:
+        self.transcript_router = transcript_router
+        self.ai_director = ai_director
+        self.scheduler = scheduler
+        self.trigger_prefilter = trigger_prefilter
+        self.output_switcher = output_switcher
+        self.switch_lookback_seconds = switch_lookback_seconds
+        self.log = log
+
+    def __call__(self, event: TranscriptEvent) -> RuntimeTranscriptEventResult | None:
+        result = process_transcript_event(
+            event,
+            self.transcript_router,
+            self.ai_director,
+            self.scheduler,
+            trigger_prefilter=self.trigger_prefilter,
+            output_switcher=self.output_switcher,
+            switch_lookback_seconds=self.switch_lookback_seconds,
+            log=self.log,
+        )
+        if not result.accepted:
+            return None
+        return result
 
 
 class TerminalOutput:
@@ -235,21 +293,57 @@ def process_line(
     return False
 
 
-def evaluate_accepted_transcript(
-    *,
-    message,
+def process_transcript_event(
+    event: TranscriptEvent,
     transcript_router: TranscriptRouter,
     ai_director: AIDirector,
     scheduler: SceneScheduler,
     trigger_prefilter: TranscriptTriggerPrefilter | None = None,
+    output_switcher: OutputSwitcher | None = None,
+    switch_lookback_seconds: int = 15,
     log=print,
-) -> None:
+) -> RuntimeTranscriptEventResult:
+    message = transcript_router.add_event(event)
+    if message is None:
+        log(f"Transcript event rejected from {event.stream_id}.")
+        return RuntimeTranscriptEventResult(
+            accepted=False,
+            reason="router_rejected",
+        )
+
+    return evaluate_accepted_transcript(
+        message=message,
+        transcript_router=transcript_router,
+        ai_director=ai_director,
+        scheduler=scheduler,
+        trigger_prefilter=trigger_prefilter,
+        output_switcher=output_switcher,
+        switch_lookback_seconds=switch_lookback_seconds,
+        log=log,
+    )
+
+
+def evaluate_accepted_transcript(
+    *,
+    message: TranscriptMessage,
+    transcript_router: TranscriptRouter,
+    ai_director: AIDirector,
+    scheduler: SceneScheduler,
+    trigger_prefilter: TranscriptTriggerPrefilter | None = None,
+    output_switcher: OutputSwitcher | None = None,
+    switch_lookback_seconds: int = 15,
+    log=print,
+) -> RuntimeTranscriptEventResult:
     if not scheduler.status().ai_enabled:
         log(
             f"Transcript accepted from {message.speaker}. "
             "AI evaluation skipped because AI mode is off."
         )
-        return
+        return RuntimeTranscriptEventResult(
+            accepted=True,
+            message=message,
+            reason="ai_disabled",
+        )
 
     gate = scheduler.ai_evaluation_gate()
     if not gate.allowed:
@@ -264,7 +358,11 @@ def evaluate_accepted_transcript(
                 f"Transcript accepted from {message.speaker}. "
                 f"AI evaluation skipped because {gate.reason}"
             )
-        return
+        return RuntimeTranscriptEventResult(
+            accepted=True,
+            message=message,
+            reason="scheduler_gate_blocked",
+        )
 
     trigger_prefilter = trigger_prefilter or TranscriptTriggerPrefilter()
     candidate_signal = trigger_prefilter.classify(
@@ -278,7 +376,11 @@ def evaluate_accepted_transcript(
             f"Transcript accepted from {message.speaker}. "
             "Local prefilter found no trigger; AI evaluation skipped."
         )
-        return
+        return RuntimeTranscriptEventResult(
+            accepted=True,
+            message=message,
+            reason="prefilter_rejected",
+        )
 
     log(
         f"Transcript accepted from {message.speaker}. "
@@ -289,17 +391,90 @@ def evaluate_accepted_transcript(
         decision = ai_director.decide(context, candidate_signal=candidate_signal)
     except AIDirectorError as exc:
         log(f"AI decision failed: {exc}")
-        return
+        return RuntimeTranscriptEventResult(
+            accepted=True,
+            message=message,
+            candidate_signal=candidate_signal,
+            ai_evaluation_attempted=True,
+            reason="ai_error",
+        )
     except Exception as exc:
         log(f"AI decision failed unexpectedly: {exc}")
-        return
+        return RuntimeTranscriptEventResult(
+            accepted=True,
+            message=message,
+            candidate_signal=candidate_signal,
+            ai_evaluation_attempted=True,
+            reason="ai_error",
+        )
 
     log(
         "AI decision: "
         f"{decision.target_scene}, confidence={decision.confidence:.2f}, "
         f"duration={decision.duration_seconds}s"
     )
+    switch_target = build_runtime_switch_target(
+        decision=decision,
+        candidate_signal=candidate_signal,
+        scheduler=scheduler,
+        switch_lookback_seconds=switch_lookback_seconds,
+    )
+    switch_result = apply_runtime_switch_target(
+        switch_target,
+        output_switcher=output_switcher,
+        log=log,
+    )
     scheduler.apply_ai_decision(decision)
+    return RuntimeTranscriptEventResult(
+        accepted=True,
+        message=message,
+        candidate_signal=candidate_signal,
+        decision=decision,
+        switch_target=switch_target,
+        switch_result=switch_result,
+        ai_evaluation_attempted=True,
+        reason="decision_evaluated",
+    )
+
+
+def build_runtime_switch_target(
+    *,
+    decision: DirectorDecision,
+    candidate_signal: HypeSignal,
+    scheduler: SceneScheduler,
+    switch_lookback_seconds: int,
+) -> SwitcherTarget | None:
+    if decision.target_scene == scheduler.default_scene:
+        return None
+    if decision.confidence < scheduler.confidence_threshold:
+        return None
+    if decision.target_scene != SCENES.get(candidate_signal.stream_id):
+        return None
+
+    return buffered_target_from_signal(
+        candidate_signal,
+        scene_name=decision.target_scene,
+        pre_roll_seconds=switch_lookback_seconds,
+    )
+
+
+def apply_runtime_switch_target(
+    switch_target: SwitcherTarget | None,
+    *,
+    output_switcher: OutputSwitcher | None = None,
+    log=print,
+) -> SwitchResult | None:
+    if switch_target is None or output_switcher is None:
+        return None
+
+    try:
+        result = output_switcher.switch(switch_target)
+    except OutputSwitchError as exc:
+        log(f"Buffered switch failed: {exc}")
+        return None
+
+    log(f"Buffered switch target {result.status.value}: {result.reason}")
+    return result
 
 
 def handle_command(command: str, scheduler: SceneScheduler, log=print) -> bool:

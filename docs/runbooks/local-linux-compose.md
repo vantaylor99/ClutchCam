@@ -15,9 +15,15 @@ The Compose stack currently provides:
   Faster-Whisper-compatible HTTP endpoint.
 - `orchestrator`: the terminal MVP, with real or dry-run OBS switching.
 - `ollama` and `ollama-pull`: optional local AI profile.
+- `faster-whisper`: optional local transcription server profile.
 
-There is not yet a bundled Faster-Whisper Compose profile. Point
-`TRANSCRIPTION_API_URL` at an existing host, container, or remote service.
+The local Faster-Whisper server is opt-in through the `local-transcription`
+profile and is not part of the default local Linux runtime. Keep
+`TRANSCRIPTION_API_URL` as the app-facing contract; point it at a local Compose
+service, a host service, or a remote service that matches the current
+`/transcribe` JSON adapter contract. The bundled `faster-whisper` service uses
+the OpenAI-compatible `fedirz/faster-whisper-server` image, whose direct upload
+endpoint is `/v1/audio/transcriptions`.
 
 Real OBS buffered media-source playback is not implemented yet. The switcher can
 resolve buffered clip URIs behind service boundaries, but the OBS adapter still
@@ -71,6 +77,36 @@ COMPOSE_PROFILES=local-ai docker compose up -d ollama
 COMPOSE_PROFILES=local-ai docker compose run --rm ollama-pull
 ```
 
+Start optional local Faster-Whisper on CPU:
+
+```bash
+COMPOSE_PROFILES=local-transcription docker compose up -d faster-whisper
+```
+
+The conservative defaults use the CPU image, a local-only host bind, and a
+Docker volume for the Hugging Face cache:
+
+```text
+FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cpu
+FASTER_WHISPER_BIND_ADDR=127.0.0.1
+FASTER_WHISPER_PORT=8000
+FASTER_WHISPER_CACHE_HOST_DIR=faster-whisper-cache
+FASTER_WHISPER_MODEL=Systran/faster-whisper-small
+FASTER_WHISPER_DEVICE=cpu
+FASTER_WHISPER_COMPUTE_TYPE=int8
+```
+
+For NVIDIA hosts, set the CUDA image and device settings, and add a local
+Compose override that exposes GPUs if your Docker daemon does not do so by
+default:
+
+```text
+FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cuda
+FASTER_WHISPER_DEVICE=cuda
+FASTER_WHISPER_COMPUTE_TYPE=float16
+FASTER_WHISPER_DEVICE_INDEX=0
+```
+
 Start the transcription worker only when `TRANSCRIPTION_API_URL` points at a
 reachable Faster-Whisper-compatible API:
 
@@ -78,6 +114,26 @@ reachable Faster-Whisper-compatible API:
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
 COMPOSE_PROFILES=media-server,transcription-worker \
 docker compose up -d --build transcription-worker
+```
+
+If you override the local service image with an adapter that exposes
+ClutchCam's current `/transcribe` JSON contract, point the worker at the
+Compose DNS name:
+
+```bash
+TRANSCRIPTION_API_URL=http://faster-whisper:8000 \
+COMPOSE_PROFILES=media-server,transcription-worker,local-transcription \
+docker compose up -d --build transcription-worker faster-whisper
+```
+
+For the stock OpenAI-compatible `faster-whisper` server, validate direct uploads
+against `/v1/audio/transcriptions` until the runtime adapter supports that
+request shape:
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F "file=@/path/to/audio.wav" \
+  -F "model=Systran/faster-whisper-small"
 ```
 
 Run the orchestrator in dry-run OBS mode:
@@ -209,6 +265,24 @@ Environment equivalents use `CHECKPOINT_SMOKE_RUN_<CHECK>=true` or
 `CHECKPOINT_SMOKE_SKIP_<CHECK>=true`, with check names such as `MEDIA_SERVER`,
 `BUFFER`, `TRANSCRIPTION`, `AI`, and `ORCHESTRATOR`.
 
+Generated-ingest Compose checkpoint:
+
+```bash
+python scripts/compose_generated_ingest_checkpoint.py
+python scripts/compose_generated_ingest_checkpoint.py --run
+```
+
+The first command is intentionally safe and emits a skipped JSON report. The
+`--run` form starts `media-server` and `buffer-worker` with Docker Compose,
+publishes bounded generated FFmpeg RTMP streams, polls buffer metadata, and
+passes only after at least one stream has a resolvable lookback clip. Use
+`--no-compose` to target already-running services, `--streams player_1,player_2`
+to validate multiple players, and
+`GENERATED_INGEST_BUFFER_READY_TIMEOUT_SECONDS` or `SMOKE_PUBLISH_SECONDS` to
+give slower hosts more time. The report includes status, duration, stream IDs,
+Compose and publish summaries, buffer readiness, failure reason, and operator
+hints.
+
 Media-server readiness and generated publish:
 
 ```bash
@@ -229,12 +303,24 @@ SMOKE_BUFFER_STREAM_IDS=player_1 \
 python scripts/smoke_buffer_worker.py
 ```
 
-Transcription API endpoint:
+Local Faster-Whisper server profile, direct OpenAI-compatible upload:
+
+```bash
+COMPOSE_PROFILES=local-transcription docker compose up -d faster-whisper
+curl http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F "file=@/path/to/audio.wav" \
+  -F "model=Systran/faster-whisper-small"
+```
+
+ClutchCam transcription adapter endpoint:
 
 ```bash
 TRANSCRIPTION_API_URL=http://127.0.0.1:8000 \
 python scripts/smoke_transcription_api.py
 ```
+
+This script posts to `<TRANSCRIPTION_API_URL>/transcribe` and does not require
+Docker, GPUs, or a networked service when imported by the unit suite.
 
 AI endpoint, local Ollama:
 
@@ -290,7 +376,11 @@ Unavailable transcription service:
 - Recover: start the external Faster-Whisper-compatible service, verify
   `TRANSCRIPTION_API_URL` from the host and from the container, and use
   `host.docker.internal` for a host service reached from Compose.
-- Remember: the local Faster-Whisper Compose profile is not implemented yet.
+- For the optional local `faster-whisper` profile, inspect
+  `docker compose logs --tail=100 faster-whisper`, confirm the cache volume is
+  writable, and use `/v1/audio/transcriptions` for direct OpenAI-compatible
+  upload checks. Use `/transcribe` only with a service or adapter that exposes
+  ClutchCam's current JSON contract.
 
 Unavailable AI endpoint:
 
@@ -320,6 +410,6 @@ Buffered OBS playback unavailable:
 ## Shutdown
 
 ```bash
-COMPOSE_PROFILES=media-server,buffer-worker,transcription-worker,orchestrator,local-ai \
+COMPOSE_PROFILES=media-server,buffer-worker,transcription-worker,orchestrator,local-ai,local-transcription \
 docker compose down
 ```

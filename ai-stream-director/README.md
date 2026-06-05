@@ -353,21 +353,78 @@ extractor is not started by the terminal MVP yet.
 ## Transcription API Adapter
 
 `src/services/transcription.py` also includes `FasterWhisperTranscriber`, an
-HTTP adapter for Faster-Whisper-compatible services. It posts extracted audio
-chunk references to `<TRANSCRIPTION_API_URL>/transcribe`, accepts common
-segment response shapes, shifts chunk-relative timestamps by the audio
-reference start time, and emits normalized `TranscriptEvent` objects.
+HTTP adapter for Faster-Whisper-compatible services. The current app-facing
+contract posts extracted audio chunk references as JSON to
+`<TRANSCRIPTION_API_URL>/transcribe`, accepts common segment response shapes,
+shifts chunk-relative timestamps by the audio reference start time, and emits
+normalized `TranscriptEvent` objects.
+
+Docker Compose also includes an optional `faster-whisper` service for local
+Faster-Whisper hosting. Its documented default image is
+`fedirz/faster-whisper-server:latest-cpu`, an OpenAI-compatible server whose
+direct transcription API is `POST /v1/audio/transcriptions` with multipart
+audio uploads. Keep `TRANSCRIPTION_API_URL` as the only ClutchCam runtime
+setting: point it at a local Compose service, a host service, or a remote
+endpoint that exposes the current `/transcribe` JSON contract, or use the
+OpenAI-compatible endpoint directly for operator validation until the runtime
+adapter grows that request shape.
 
 Runtime settings:
 
 ```text
-TRANSCRIPTION_API_URL=http://faster-whisper:8000
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000
+# TRANSCRIPTION_API_URL=http://faster-whisper:8000
+# TRANSCRIPTION_API_URL=https://stt-gpu.example.internal
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
 ```
 
 The adapter is unit-tested with mocked HTTP responses and does not require a
 live Faster-Whisper container for local validation. It is not wired into
 `src/main.py` yet.
+
+## Optional Local Faster-Whisper Profile
+
+The local transcription server is disabled by default and is not part of the
+default local Linux runtime. Start it only when the host has enough CPU/GPU
+capacity and you want a local Faster-Whisper-compatible API nearby:
+
+```bash
+COMPOSE_PROFILES=local-transcription docker compose up -d faster-whisper
+```
+
+Useful environment knobs:
+
+```text
+FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cpu
+# FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cuda
+FASTER_WHISPER_BIND_ADDR=127.0.0.1
+FASTER_WHISPER_PORT=8000
+FASTER_WHISPER_CACHE_HOST_DIR=faster-whisper-cache
+FASTER_WHISPER_MODEL=Systran/faster-whisper-small
+FASTER_WHISPER_DEVICE=cpu
+# FASTER_WHISPER_DEVICE=cuda
+FASTER_WHISPER_DEVICE_INDEX=0
+FASTER_WHISPER_COMPUTE_TYPE=int8
+# FASTER_WHISPER_COMPUTE_TYPE=float16
+FASTER_WHISPER_CPU_THREADS=0
+FASTER_WHISPER_NUM_WORKERS=1
+FASTER_WHISPER_TTL_SECONDS=300
+FASTER_WHISPER_PRELOAD_MODELS=[]
+```
+
+The CPU image is the conservative default. NVIDIA hosts can switch to the CUDA
+image, set `FASTER_WHISPER_DEVICE=cuda`, and expose GPUs with a local Compose
+override when the Docker daemon does not provide them automatically. Keep
+`FASTER_WHISPER_BIND_ADDR=127.0.0.1` unless the transcription API is meant to be
+reachable from other machines.
+
+Direct OpenAI-compatible server check:
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F "file=@/path/to/audio.wav" \
+  -F "model=Systran/faster-whisper-small"
+```
 
 ## Running With Docker Compose
 
@@ -439,7 +496,17 @@ Expected result: JSON reporting stream IDs, latest segment metadata, and a
 results include a reason, such as missing `segments.csv` metadata or absent
 segment files.
 
-Smoke a Faster-Whisper-compatible transcription endpoint when one is available:
+Optionally start the local Faster-Whisper server profile and probe its
+OpenAI-compatible endpoint directly:
+
+```bash
+COMPOSE_PROFILES=local-transcription docker compose up -d faster-whisper
+curl http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F "file=@/path/to/audio.wav" \
+  -F "model=Systran/faster-whisper-small"
+```
+
+Smoke a ClutchCam-compatible transcription endpoint when one is available:
 
 ```bash
 TRANSCRIPTION_API_URL=http://127.0.0.1:8000 \
@@ -449,7 +516,10 @@ python scripts/smoke_transcription_api.py
 Expected result: JSON with `<TRANSCRIPTION_API_URL>/transcribe`, the generated
 fixture audio URI, request timeout, and transcript event count. Set
 `SMOKE_TRANSCRIPTION_AUDIO_URI` to an endpoint-readable fixture when the API
-runs on another machine or container.
+runs on another machine or container. The smoke script validates the current
+JSON `/transcribe` adapter contract; the stock `fedirz/faster-whisper-server`
+container exposes OpenAI-compatible `/v1/audio/transcriptions` for direct file
+uploads.
 
 Smoke the configured AI endpoint. For Ollama, the smoke verifies that
 `GEMMA_MODEL` appears in `/api/tags`:

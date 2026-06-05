@@ -3,8 +3,12 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
+REPO_DIR = PROJECT_DIR.parent
 COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
 ENV_EXAMPLE_FILE = PROJECT_DIR / ".env.example"
+README_FILE = PROJECT_DIR / "README.md"
+ARCHITECTURE_FILE = REPO_DIR / "docs" / "ARCHITECTURE.md"
+LOCAL_LINUX_RUNBOOK_FILE = REPO_DIR / "docs" / "runbooks" / "local-linux-compose.md"
 
 
 def read_compose() -> str:
@@ -130,7 +134,6 @@ class LinuxComposeStackTests(unittest.TestCase):
         self.assertNotIn("clutchcam-audio-data:", compose)
 
     def test_local_ai_profile_is_optional_ollama_only(self) -> None:
-        compose = read_compose().lower()
         ollama = service_block("ollama")
         ollama_pull = service_block("ollama-pull")
 
@@ -144,17 +147,60 @@ class LinuxComposeStackTests(unittest.TestCase):
             'ollama pull \\"$${GEMMA_MODEL:-$${OLLAMA_MODEL:-gemma3:4b}}\\"',
             ollama_pull,
         )
-        self.assertNotIn("faster-whisper:", compose)
-        self.assertNotIn("image: faster", compose)
+
+    def test_local_transcription_profile_is_optional_faster_whisper_server(self) -> None:
+        compose = read_compose()
+        faster_whisper = service_block("faster-whisper")
+        transcription_worker = service_block("transcription-worker")
+
+        self.assertIn('profiles: ["local-transcription"]', faster_whisper)
+        self.assertNotIn("local-linux", faster_whisper)
+        self.assertNotIn("depends_on:", faster_whisper)
+        self.assertNotIn("faster-whisper:", transcription_worker)
+        self.assertIn(
+            "image: ${FASTER_WHISPER_IMAGE:-fedirz/faster-whisper-server:latest-cpu}",
+            faster_whisper,
+        )
+        self.assertIn(
+            "${FASTER_WHISPER_BIND_ADDR:-127.0.0.1}:"
+            "${FASTER_WHISPER_PORT:-8000}:8000/tcp",
+            faster_whisper,
+        )
+        self.assertIn("UVICORN_HOST: 0.0.0.0", faster_whisper)
+        self.assertIn("UVICORN_PORT: 8000", faster_whisper)
+        self.assertIn(
+            "WHISPER__MODEL: "
+            "${FASTER_WHISPER_MODEL:-Systran/faster-whisper-small}",
+            faster_whisper,
+        )
+        self.assertIn(
+            "WHISPER__INFERENCE_DEVICE: ${FASTER_WHISPER_DEVICE:-cpu}",
+            faster_whisper,
+        )
+        self.assertIn(
+            "WHISPER__COMPUTE_TYPE: ${FASTER_WHISPER_COMPUTE_TYPE:-int8}",
+            faster_whisper,
+        )
+        self.assertIn(
+            "${FASTER_WHISPER_CACHE_HOST_DIR:-faster-whisper-cache}:"
+            "/root/.cache/huggingface",
+            faster_whisper,
+        )
+        self.assertIn("socket.create_connection", faster_whisper)
+        self.assertIn("faster-whisper-cache:", compose)
 
     def test_env_example_documents_profiles_and_portable_endpoints(self) -> None:
         env_example = ENV_EXAMPLE_FILE.read_text(encoding="utf-8")
+        profiles_line = next(
+            line for line in env_example.splitlines() if line.startswith("COMPOSE_PROFILES=")
+        )
 
         self.assertIn(
             "COMPOSE_PROFILES=media-server,buffer-worker,"
             "transcription-worker,orchestrator,local-ai",
             env_example,
         )
+        self.assertNotIn("local-transcription", profiles_line)
         self.assertIn("LOOKBACK_BUFFER_HOST_DIR=/dev/shm/clutchcam", env_example)
         self.assertIn("AUDIO_EXTRACT_HOST_DIR=/dev/shm/clutchcam-audio", env_example)
         self.assertIn("GEMMA_API_URL=http://ollama:11434", env_example)
@@ -166,8 +212,34 @@ class LinuxComposeStackTests(unittest.TestCase):
             "TRANSCRIPTION_API_URL=http://host.docker.internal:8000",
             env_example,
         )
+        self.assertIn(
+            "# TRANSCRIPTION_API_URL=http://faster-whisper:8000",
+            env_example,
+        )
         self.assertIn("# TRANSCRIPTION_API_URL=https://stt-gpu.example.internal", env_example)
-        self.assertNotIn("TRANSCRIPTION_API_URL=http://faster-whisper:8000", env_example)
+        self.assertIn(
+            "FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cpu",
+            env_example,
+        )
+        self.assertIn(
+            "# FASTER_WHISPER_IMAGE=fedirz/faster-whisper-server:latest-cuda",
+            env_example,
+        )
+        self.assertIn("FASTER_WHISPER_DEVICE=cpu", env_example)
+        self.assertIn("# FASTER_WHISPER_DEVICE=cuda", env_example)
+        self.assertIn("FASTER_WHISPER_MODEL=Systran/faster-whisper-small", env_example)
+        self.assertIn("FASTER_WHISPER_CACHE_HOST_DIR=faster-whisper-cache", env_example)
+
+    def test_docs_document_transcription_profile_and_endpoint_contracts(self) -> None:
+        docs = "\n\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (README_FILE, ARCHITECTURE_FILE, LOCAL_LINUX_RUNBOOK_FILE)
+        )
+
+        self.assertIn("local-transcription", docs)
+        self.assertIn("fedirz/faster-whisper-server", docs)
+        self.assertIn("<TRANSCRIPTION_API_URL>/transcribe", docs)
+        self.assertIn("/v1/audio/transcriptions", docs)
 
 
 if __name__ == "__main__":

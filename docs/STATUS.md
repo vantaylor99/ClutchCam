@@ -1,6 +1,6 @@
 # Current Project Status
 
-Last updated: 2026-06-04.
+Last updated: 2026-06-05.
 
 ## What Exists
 
@@ -34,6 +34,18 @@ The MVP supports:
 - No-player smoke entrypoints under `ai-stream-director/scripts/` for media
   server, buffer worker, transcription API, AI endpoint, and dry-run
   orchestrator checks.
+- A one-command checkpoint runner that safely skips or runs each smoke boundary
+  and emits structured JSON.
+- An opt-in generated-ingest checkpoint script that can start or target SRS and
+  the buffer worker, publish bounded generated RTMP streams, and verify that a
+  lookback clip becomes resolvable on a local Linux host.
+- An optional `local-transcription` Compose profile for a local
+  Faster-Whisper/OpenAI-compatible transcription server. This profile is
+  disabled by default and remains endpoint-contract driven through
+  `TRANSCRIPTION_API_URL`.
+- An import-safe `RuntimeTranscriptEventHandler` boundary that routes normalized
+  `TranscriptEvent` objects through the router, local prefilter, AI director,
+  scheduler gates, and buffered switch target construction.
 - Operator runbooks under `docs/runbooks/` for terminal dry-run setup, local
   Linux Compose setup, smoke checks, OBS scene preparation, stream publishing,
   and recovery from common local event failures.
@@ -47,6 +59,10 @@ Production-oriented configuration has been introduced:
 - `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
+- Optional local transcription service settings: `FASTER_WHISPER_IMAGE`,
+  `FASTER_WHISPER_BIND_ADDR`, `FASTER_WHISPER_PORT`,
+  `FASTER_WHISPER_MODEL`, `FASTER_WHISPER_DEVICE`,
+  `FASTER_WHISPER_COMPUTE_TYPE`, and related worker/cache knobs
 - `INGEST_API_URL`
 - `LOOKBACK_BUFFER_DIR`
 - `LOOKBACK_WINDOW_SECONDS`
@@ -70,7 +86,9 @@ The shared contracts currently define:
 - `SwitcherTarget`, including optional resolved buffered media URI
 
 These contracts are partially wired into service boundaries, but not yet into a
-single end-to-end production runtime.
+single end-to-end production runtime. Normalized transcript events now have an
+orchestrator sink, but the transcription worker is not yet connected to a live
+transport into that sink.
 
 The `src/services/` package defines lightweight boundaries for:
 
@@ -96,11 +114,13 @@ The repo does not yet include:
 
 - A single end-to-end runtime that starts media ingest, FFmpeg buffering, audio
   extraction, transcription, AI orchestration, and switching together.
-- Live Docker/Linux validation against real SRS, FFmpeg, Faster-Whisper, Ollama,
-  and OBS processes.
+- A completed live Docker/Linux validation run against real SRS, FFmpeg,
+  Faster-Whisper, Ollama, and OBS processes. The opt-in generated-ingest
+  checkpoint exists, but still needs to be run on a Linux host with Docker and
+  FFmpeg.
 - OBS or PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
-- Production deployment documentation beyond the local MVP operator runbooks.
+- Production deployment documentation beyond the local-first operator runbooks.
 
 ## Validation
 
@@ -141,6 +161,21 @@ without network access:
 
 ```powershell
 python -m unittest tests.test_transcription_event_api -v
+```
+
+The runtime transcript event boundary tests run without live FFmpeg, OBS,
+Docker, or AI services:
+
+```powershell
+python -m unittest tests.test_runtime_event_pipeline -v
+```
+
+The generated-ingest checkpoint defaults to a safe skipped JSON report. The
+live form is opt-in and should be run on Linux with Docker and FFmpeg:
+
+```powershell
+python scripts\compose_generated_ingest_checkpoint.py
+python scripts\compose_generated_ingest_checkpoint.py --run
 ```
 
 Final terminal-MVP dry-run review passed for calm transcript input, a focused

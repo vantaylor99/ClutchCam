@@ -80,6 +80,36 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  faster-whisper:
+    profiles: ["local-transcription"]
+    image: ${FASTER_WHISPER_IMAGE:-fedirz/faster-whisper-server:latest-cpu}
+    container_name: ai-stream-director-faster-whisper
+    ports:
+      - "${FASTER_WHISPER_BIND_ADDR:-127.0.0.1}:${FASTER_WHISPER_PORT:-8000}:8000/tcp"
+    environment:
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: 8000
+      LOG_LEVEL: ${FASTER_WHISPER_LOG_LEVEL:-info}
+      ENABLE_UI: ${FASTER_WHISPER_ENABLE_UI:-false}
+      HF_HOME: /root/.cache/huggingface
+      WHISPER__MODEL: ${FASTER_WHISPER_MODEL:-Systran/faster-whisper-small}
+      WHISPER__INFERENCE_DEVICE: ${FASTER_WHISPER_DEVICE:-cpu}
+      WHISPER__DEVICE_INDEX: ${FASTER_WHISPER_DEVICE_INDEX:-0}
+      WHISPER__COMPUTE_TYPE: ${FASTER_WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER__CPU_THREADS: ${FASTER_WHISPER_CPU_THREADS:-0}
+      WHISPER__NUM_WORKERS: ${FASTER_WHISPER_NUM_WORKERS:-1}
+      WHISPER__TTL: ${FASTER_WHISPER_TTL_SECONDS:-300}
+      PRELOAD_MODELS: ${FASTER_WHISPER_PRELOAD_MODELS:-[]}
+    volumes:
+      - ${FASTER_WHISPER_CACHE_HOST_DIR:-faster-whisper-cache}:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1', 8000), 3); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
   orchestrator:
     profiles: ["orchestrator", "local-linux"]
     build: .
@@ -154,3 +184,4 @@ services:
 
 volumes:
   ollama-data:
+  faster-whisper-cache:

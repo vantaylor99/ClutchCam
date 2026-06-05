@@ -169,11 +169,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/30-runtime-event-pipeline-wiring.md`
-- `tickets/implement/31-faster-whisper-compose-profile.md`
-- `tickets/implement/34-compose-generated-ingest-checkpoint.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -212,8 +208,11 @@ Completed review tickets:
 - `tickets/complete/26-local-linux-compose-profiles.md`
 - `tickets/complete/27-local-stack-smoke-entrypoints.md`
 - `tickets/complete/28-health-check-primitives.md`
+- `tickets/complete/30-runtime-event-pipeline-wiring.md`
+- `tickets/complete/31-faster-whisper-compose-profile.md`
 - `tickets/complete/32-runtime-healthcheck-entrypoints.md`
 - `tickets/complete/33-local-checkpoint-smoke-runner.md`
+- `tickets/complete/34-compose-generated-ingest-checkpoint.md`
 - `tickets/complete/35-local-ai-model-readiness-checkpoint.md`
 
 Backlog tickets:
