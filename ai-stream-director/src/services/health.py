@@ -21,6 +21,7 @@ from config import (
     AI_PROVIDER_OPENAI_COMPATIBLE,
     AppConfig,
     get_config,
+    redact_secrets,
 )
 
 
@@ -127,7 +128,7 @@ class HealthResult:
             "duration_seconds": self.duration_seconds,
         }
         if self.details:
-            record["details"] = dict(self.details)
+            record["details"] = redact_secrets(dict(self.details))
         return record
 
 

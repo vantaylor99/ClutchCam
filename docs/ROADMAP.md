@@ -172,10 +172,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/37-latency-budget-and-soak-harness.md`
-- `tickets/implement/38-runtime-config-and-secrets-hardening.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -222,6 +219,8 @@ Completed review tickets:
 - `tickets/complete/34-compose-generated-ingest-checkpoint.md`
 - `tickets/complete/35-local-ai-model-readiness-checkpoint.md`
 - `tickets/complete/36-linux-cloud-deployment-topology-runbook.md`
+- `tickets/complete/37-latency-budget-and-soak-harness.md`
+- `tickets/complete/38-runtime-config-and-secrets-hardening.md`
 - `tickets/complete/39-openai-compatible-transcription-adapter.md`
 
 Backlog tickets:

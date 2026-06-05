@@ -84,6 +84,12 @@ Production defaults remain environment-driven through `config.py`, including
 For the Compose stack, `INGEST_API_URL` points workers at
 `rtmp://media-server:1935/live` so stream records resolve through Docker service
 DNS instead of host-published ports.
+`config.py` validates locally-checkable runtime settings at load time: endpoint
+URL schemes and hosts, TCP ports, fixed stream IDs, positive worker durations,
+filesystem path settings, provider modes, and provider-specific endpoint/model
+values. The validation stays dry-run friendly: OBS auth can be omitted when OBS
+WebSocket auth is disabled or `DRY_RUN_OBS=true`, and OpenAI-compatible Gemma
+endpoints can be keyless for local vLLM-style servers.
 
 ## Service Responsibilities
 
@@ -211,6 +217,30 @@ clip_end   = T + post_roll
 The rolling buffer should retain at least `LOOKBACK_WINDOW_SECONDS` of playable
 segments. Defaults are a 30-second retention window and a 15-second pre-roll.
 
+## Latency And Soak Operations
+
+Live orchestration latency is tracked as a budgeted path across buffer
+availability, transcript event routing, local prefiltering, model decision,
+clip resolution, switch action, and end-to-end event handling. The offline
+harness at `ai-stream-director/scripts/latency_soak_harness.py` runs this path
+through the production contracts with deterministic fake model, buffer, and
+switcher adapters. It does not start Docker, OBS, FFmpeg, GPU inference, or
+network services by default.
+
+Run a bounded local report from `ai-stream-director/`:
+
+```text
+python scripts/latency_soak_harness.py --events 48
+```
+
+The script emits structured JSON with event counts, accepted/rejected and
+dropped/late events, per-stage timing distributions, stage budget pass/fail
+results, and basic process/memory details. A nonzero exit means at least one
+observed stage exceeded its configured budget. Individual budgets can be
+overridden for experiments with `--budget stage=milliseconds`; live
+infrastructure comparisons should remain opt-in and keep the same JSON shape so
+offline, LAN, and cloud endpoint runs are comparable.
+
 ## Infrastructure Boundaries
 
 The app logic must not know where inference runs. Local Ollama, local vLLM, and
@@ -241,6 +271,12 @@ cloud GPU/VM endpoints as long as `GEMMA_API_URL` and `TRANSCRIPTION_API_URL`
 keep the same HTTP contracts. See
 `docs/runbooks/linux-cloud-deployment-topology.md` for bind-address, firewall,
 RAM-backed storage, GPU runtime, and secrets guidance.
+
+Structured diagnostics must not leak credentials. Health reports and
+config-shaped details redact `GEMMA_API_KEY`, `OBS_PASSWORD`, and future fields
+with secret-shaped names such as key, token, password, secret, `apiKey`,
+`accessToken`, or `refreshToken`. Runtime logs and smoke summaries should
+report whether auth is configured rather than printing secret values.
 
 Provider examples:
 

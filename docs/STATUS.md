@@ -31,9 +31,16 @@ The MVP supports:
   stable streams under `live/player_1` through `live/player_4`.
 - Runtime entrypoints for the buffer worker and transcription worker.
 - Health-check and structured-log primitives for service runtimes.
+- Runtime configuration validation for locally-checkable URL, port, stream,
+  duration, provider, and path settings.
+- Centralized secret redaction for structured health/config-style diagnostic
+  details.
 - No-player smoke entrypoints under `ai-stream-director/scripts/` for media
   server, buffer worker, transcription API, AI endpoint, and dry-run
   orchestrator checks.
+- An opt-in deterministic offline latency/soak harness that exercises the
+  transcript-to-buffered-switch path with fake model, buffer, and switch
+  adapters and emits structured timing-budget JSON.
 - A one-command checkpoint runner that safely skips or runs each smoke boundary
   and emits structured JSON.
 - An opt-in generated-ingest checkpoint script that can start or target SRS and
@@ -110,6 +117,9 @@ The `src/services/` package defines lightweight boundaries for:
 These modules intentionally do not instantiate OBS, FFmpeg, media-server,
 transcription, AI, Docker, or network clients at import time. The concrete
 buffer adapter starts FFmpeg only after explicit construction and `start()`.
+`get_config()` now validates locally-checkable production-facing values before
+long-running services start, while keeping dry-run and keyless local endpoint
+workflows available.
 
 ## What Does Not Exist Yet
 
@@ -125,6 +135,8 @@ The repo does not yet include:
   FFmpeg.
 - PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
+- Live latency/soak runs against real LAN or cloud endpoints. The offline
+  harness exists as a deterministic baseline.
 - Live cloud or multi-host deployment validation. The topology runbook now
   documents intended host-local, two-Linux-host, and future cloud GPU/VM
   layouts, but those paths have not been exercised with real remote services.

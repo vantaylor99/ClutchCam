@@ -1,8 +1,10 @@
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
@@ -305,6 +307,23 @@ class SmokeAIEndpointTests(unittest.TestCase):
         self.assertTrue(result.api_key_configured)
         self.assertEqual(calls[0][0], "https://llm.example.test")
         self.assertEqual(calls[0][1]["headers"], {"Authorization": "Bearer secret"})
+
+    def test_openai_compatible_smoke_result_does_not_serialize_api_key(self) -> None:
+        secret = "super-secret-token"
+
+        result = smoke_ai_endpoint.smoke_ai_endpoint(
+            {
+                "AI_PROVIDER": "openai-compatible",
+                "GEMMA_API_URL": "https://llm.example.test/v1/chat/completions",
+                "GEMMA_MODEL": "gemma",
+                "GEMMA_API_KEY": secret,
+            },
+            get=lambda *args, **kwargs: FakeResponse({"ok": True}),
+        )
+
+        payload = json.dumps(asdict(result), sort_keys=True)
+        self.assertTrue(result.api_key_configured)
+        self.assertNotIn(secret, payload)
 
 
 class SmokeOrchestratorDryRunTests(unittest.TestCase):

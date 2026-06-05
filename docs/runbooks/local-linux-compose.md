@@ -65,6 +65,25 @@ SRS_SRT_PORT=10080
 Use the Linux host LAN IP in publisher URLs. Do not give player machines
 `127.0.0.1`; that points them back at themselves.
 
+## Runtime Config And Secrets
+
+Runtime config is validated before workers start any long-running local work.
+Use absolute endpoint URLs: `INGEST_API_URL`, `LOOKBACK_INPUT_URL_PLAYER_N`,
+and `AUDIO_INPUT_URL_PLAYER_N` accept `rtmp`, `rtmps`, `srt`, `http`, `https`,
+or `file` URLs; `GEMMA_API_URL` and `TRANSCRIPTION_API_URL` must be `http` or
+`https`. Ports must be in the TCP range, stream IDs stay fixed to `player_1`
+through `player_4`, durations and sample counts must be positive where they
+drive workers, and runtime paths such as `LOOKBACK_BUFFER_DIR`,
+`AUDIO_EXTRACT_DIR`, and `FFMPEG_EXECUTABLE` must be non-empty.
+
+Keep dry-run ergonomics intact by setting `DRY_RUN_OBS=true` for smoke tests
+that do not need OBS, Docker GPU access, or cloud services. OpenAI-compatible
+Gemma endpoints may be keyless for local vLLM-style servers; set
+`GEMMA_API_KEY` only when the endpoint requires bearer auth. Do not put real
+secrets in committed files. Structured health/config details redact
+`GEMMA_API_KEY`, `OBS_PASSWORD`, and future secret-shaped key, token, password,
+or secret fields before JSON output.
+
 ## Start Local Services
 
 Start SRS and the rolling buffer:

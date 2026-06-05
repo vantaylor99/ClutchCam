@@ -16,8 +16,10 @@ sys.path.insert(0, str(SRC_DIR))
 from config import (  # noqa: E402
     AI_PROVIDER_OLLAMA,
     AI_PROVIDER_OPENAI_COMPATIBLE,
+    SECRET_REDACTION,
     SCENES,
     get_config,
+    redact_secrets,
 )
 from ai_director import DirectorDecision  # noqa: E402
 from main import TerminalOutput, find_missing_scenes, process_line  # noqa: E402
@@ -66,6 +68,108 @@ class DryRunOBSConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"AI_PROVIDER": "mystery"}, clear=True):
             with self.assertRaisesRegex(ValueError, "Unsupported AI_PROVIDER"):
                 get_config()
+
+    def test_rejects_invalid_runtime_config_values(self) -> None:
+        cases = (
+            ({"OBS_PORT": "70000"}, "OBS_PORT must be between 1 and 65535"),
+            ({"OBS_PORT": "not-a-port"}, "OBS_PORT must be an integer"),
+            ({"INGEST_API_URL": "localhost/live"}, "INGEST_API_URL must use"),
+            (
+                {"TRANSCRIPTION_API_URL": "rtmp://whisper/live"},
+                "TRANSCRIPTION_API_URL must use",
+            ),
+            (
+                {"GEMMA_API_URL": "http:///missing-host"},
+                "GEMMA_API_URL must include a host",
+            ),
+            (
+                {"GEMMA_API_URL": "https://user:pass@llm.example.test"},
+                "GEMMA_API_URL cannot include embedded credentials",
+            ),
+            ({"LOOKBACK_BUFFER_DIR": "  "}, "LOOKBACK_BUFFER_DIR is required"),
+            (
+                {"LOOKBACK_WINDOW_SECONDS": "0"},
+                "LOOKBACK_WINDOW_SECONDS must be positive",
+            ),
+            (
+                {
+                    "LOOKBACK_WINDOW_SECONDS": "10",
+                    "SWITCH_LOOKBACK_SECONDS": "11",
+                },
+                "SWITCH_LOOKBACK_SECONDS cannot exceed LOOKBACK_WINDOW_SECONDS",
+            ),
+            (
+                {"CONFIDENCE_THRESHOLD": "1.5"},
+                "CONFIDENCE_THRESHOLD must be between 0 and 1",
+            ),
+            (
+                {"TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS": "0"},
+                "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS must be positive",
+            ),
+        )
+
+        for env, message in cases:
+            with self.subTest(env=env):
+                with patch.dict(os.environ, env, clear=True):
+                    with self.assertRaisesRegex(ValueError, message):
+                        get_config()
+
+    def test_stream_input_overrides_must_be_valid_urls(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"LOOKBACK_INPUT_URL_PLAYER_2": "media-server/live/player_2"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "LOOKBACK_INPUT_URL_\\*:player_2 must use",
+            ):
+                get_config()
+
+    def test_openai_compatible_provider_keeps_local_keyless_endpoint_ergonomics(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AI_PROVIDER": "openai-compatible",
+                "GEMMA_API_URL": "http://vllm:8000/v1/chat/completions",
+                "GEMMA_MODEL": "google/gemma-3-4b-it",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.ai_provider, AI_PROVIDER_OPENAI_COMPATIBLE)
+        self.assertEqual(config.gemma_api_key, "")
+
+    def test_redact_secrets_handles_current_and_future_secret_names(self) -> None:
+        redacted = redact_secrets(
+            {
+                "GEMMA_API_KEY": "gemma-secret",
+                "OBS_PASSWORD": "obs-secret",
+                "nested": {
+                    "future_refresh_token": "refresh-secret",
+                    "public_url": "https://example.test",
+                    "signed_url": "https://example.test/path?api_key=url-secret&ok=1",
+                    "empty_api_key": "",
+                    "keyframe_count": 3,
+                    "apiKey": "camel-secret",
+                },
+                "items": [{"client_secret": "client-secret"}],
+            }
+        )
+
+        self.assertEqual(redacted["GEMMA_API_KEY"], SECRET_REDACTION)
+        self.assertEqual(redacted["OBS_PASSWORD"], SECRET_REDACTION)
+        self.assertEqual(redacted["nested"]["future_refresh_token"], SECRET_REDACTION)
+        self.assertEqual(redacted["nested"]["public_url"], "https://example.test")
+        self.assertEqual(
+            redacted["nested"]["signed_url"],
+            f"https://example.test/path?api_key={SECRET_REDACTION}&ok=1",
+        )
+        self.assertEqual(redacted["nested"]["empty_api_key"], "")
+        self.assertEqual(redacted["nested"]["keyframe_count"], 3)
+        self.assertEqual(redacted["nested"]["apiKey"], SECRET_REDACTION)
+        self.assertEqual(redacted["items"][0]["client_secret"], SECRET_REDACTION)
 
     def test_prefers_gemma_env_names_over_ollama_compat_aliases(self) -> None:
         with patch.dict(

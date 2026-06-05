@@ -15,10 +15,12 @@ import transcription_worker  # noqa: E402
 from config import (  # noqa: E402
     AI_PROVIDER_OLLAMA,
     AI_PROVIDER_OPENAI_COMPATIBLE,
+    SECRET_REDACTION,
     SCENES,
     TRANSCRIPTION_REQUEST_MODE_JSON,
     AppConfig,
 )
+from services.health import HealthResult  # noqa: E402
 from services.health import run_runtime_healthcheck  # noqa: E402
 
 
@@ -233,6 +235,30 @@ class RuntimeHealthcheckEntrypointTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         healthcheck.assert_called_once_with("orchestrator")
+
+    def test_health_result_details_redact_secret_values(self) -> None:
+        result = HealthResult.healthy(
+            "config",
+            details={
+                "GEMMA_API_KEY": "gemma-secret",
+                "OBS_PASSWORD": "obs-secret",
+                "future_token": "future-secret",
+                "url": "https://example.test/path?token=url-secret&ok=1",
+            },
+        )
+
+        record = result.to_record()
+
+        self.assertEqual(record["details"]["GEMMA_API_KEY"], SECRET_REDACTION)
+        self.assertEqual(record["details"]["OBS_PASSWORD"], SECRET_REDACTION)
+        self.assertEqual(record["details"]["future_token"], SECRET_REDACTION)
+        self.assertEqual(
+            record["details"]["url"],
+            f"https://example.test/path?token={SECRET_REDACTION}&ok=1",
+        )
+        self.assertNotIn("gemma-secret", json.dumps(record))
+        self.assertNotIn("obs-secret", json.dumps(record))
+        self.assertNotIn("url-secret", json.dumps(record))
 
 
 def _messages(payload: dict[str, object]) -> list[str]:
