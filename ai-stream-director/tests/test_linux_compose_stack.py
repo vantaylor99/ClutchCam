@@ -5,6 +5,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = PROJECT_DIR.parent
 COMPOSE_FILE = PROJECT_DIR / "docker-compose.yml"
+DOCKERFILE = PROJECT_DIR / "Dockerfile"
 ENV_EXAMPLE_FILE = PROJECT_DIR / ".env.example"
 README_FILE = PROJECT_DIR / "README.md"
 ARCHITECTURE_FILE = REPO_DIR / "docs" / "ARCHITECTURE.md"
@@ -35,6 +36,17 @@ def service_block(service_name: str) -> str:
 
 
 class LinuxComposeStackTests(unittest.TestCase):
+    def test_runtime_image_installs_ffmpeg_without_apt_metadata(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        normalized = " ".join(dockerfile.replace("\\\n", " ").split())
+
+        self.assertIn(
+            "RUN apt-get update && DEBIAN_FRONTEND=noninteractive "
+            "apt-get install -y --no-install-recommends ffmpeg "
+            "&& rm -rf /var/lib/apt/lists/*",
+            normalized,
+        )
+
     def test_runtime_services_have_profile_scoped_entrypoints(self) -> None:
         expected_services = {
             "media-server": 'profiles: ["media-server", "local-linux"]',

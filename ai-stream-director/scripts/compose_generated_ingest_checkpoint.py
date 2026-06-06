@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
@@ -22,6 +25,8 @@ CHECKPOINT_NAME = "compose-generated-ingest"
 DEFAULT_STREAM_IDS = ("player_1",)
 COMPOSE_PROFILES = ("media-server", "buffer-worker")
 COMPOSE_SERVICES = ("media-server", "buffer-worker")
+DIAGNOSTIC_LOG_TAIL = 100
+OUTPUT_LIMIT = 4000
 
 STATUS_PASSED = "passed"
 STATUS_FAILED = "failed"
@@ -32,6 +37,7 @@ RunCallable = Callable[..., subprocess.CompletedProcess[str]]
 MediaSmokeCallable = Callable[..., object]
 BufferInspectCallable = Callable[..., object]
 BufferAssertCallable = Callable[[object], None]
+WritablePathProbe = Callable[[Path], None]
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,11 @@ class GeneratedIngestOptions:
     stream_ids: tuple[str, ...] = DEFAULT_STREAM_IDS
     skip_compose: bool = False
     compose_build: bool = True
+    preflight_timeout_seconds: float = 10.0
     compose_timeout_seconds: float = 120.0
+    compose_ready_timeout_seconds: float = 30.0
+    compose_poll_interval_seconds: float = 1.0
+    diagnostic_timeout_seconds: float = 10.0
     buffer_ready_timeout_seconds: float = 30.0
     buffer_poll_interval_seconds: float = 1.0
 
@@ -50,6 +60,7 @@ def run_generated_ingest_checkpoint(
     *,
     options: GeneratedIngestOptions | None = None,
     run: RunCallable = subprocess.run,
+    probe_writable_path: WritablePathProbe | None = None,
     media_smoke: MediaSmokeCallable | None = None,
     buffer_inspect: BufferInspectCallable | None = None,
     buffer_assert_ready: BufferAssertCallable | None = None,
@@ -60,6 +71,7 @@ def run_generated_ingest_checkpoint(
     started_at = clock()
     stream_ids = selected_options.stream_ids
 
+    preflight_summary = _not_run_summary("live preflight has not run")
     compose_summary = _not_run_compose_summary(env, selected_options)
     publish_summary: dict[str, object] = _not_run_summary(
         "generated FFmpeg publish has not run"
@@ -67,16 +79,20 @@ def run_generated_ingest_checkpoint(
     buffer_summary: dict[str, object] = _not_run_summary(
         "buffer metadata inspection has not run"
     )
-    failure_reason: str | None = None
+    diagnostics_summary = _not_run_summary(
+        "failure diagnostics are collected only for live failures"
+    )
 
     if not selected_options.run:
         return _checkpoint_report(
             status=STATUS_SKIPPED,
             duration_seconds=_duration_since(started_at, clock),
             stream_ids=stream_ids,
+            preflight=preflight_summary,
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            diagnostics=diagnostics_summary,
             failure_reason=None,
             operator_hints=_operator_hints(
                 STATUS_SKIPPED,
@@ -84,34 +100,61 @@ def run_generated_ingest_checkpoint(
             ),
         )
 
-    runtime_env = _runtime_env(env, stream_ids)
-    compose_summary = _run_compose_services(
-        runtime_env,
+    compose_env = _compose_env(env)
+    preflight_summary = _run_preflight(
+        env,
         selected_options,
         run=run,
+        probe_writable_path=probe_writable_path or _probe_writable_path,
     )
-    if compose_summary["status"] == STATUS_FAILED:
-        failure_reason = str(compose_summary["failure_reason"])
-        return _checkpoint_report(
-            status=STATUS_FAILED,
-            duration_seconds=_duration_since(started_at, clock),
+    if preflight_summary["status"] == STATUS_FAILED:
+        return _failed_checkpoint_report(
+            started_at=started_at,
+            clock=clock,
+            env=compose_env,
+            options=selected_options,
             stream_ids=stream_ids,
+            preflight=preflight_summary,
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
-            failure_reason=failure_reason,
-            operator_hints=_operator_hints(STATUS_FAILED, failure_reason),
+            failure_reason=str(preflight_summary["failure_reason"]),
+            run=run,
         )
 
+    compose_summary = _run_compose_services(
+        compose_env,
+        selected_options,
+        run=run,
+        sleep=sleep,
+        clock=clock,
+    )
+    if compose_summary["status"] == STATUS_FAILED:
+        return _failed_checkpoint_report(
+            started_at=started_at,
+            clock=clock,
+            env=compose_env,
+            options=selected_options,
+            stream_ids=stream_ids,
+            preflight=preflight_summary,
+            compose=compose_summary,
+            publish=publish_summary,
+            buffer=buffer_summary,
+            failure_reason=str(compose_summary["failure_reason"]),
+            run=run,
+        )
+
+    runtime_env = _runtime_env(env, stream_ids)
     try:
         media_result = (media_smoke or _load_media_smoke())(
             runtime_env,
             stream_ids=stream_ids,
         )
     except Exception as exc:
+        detail = _redact_exception(exc, runtime_env)
         failure_reason = (
             "Generated RTMP publish or SRS readiness failed: "
-            f"{str(exc) or exc.__class__.__name__}"
+            f"{detail}"
         )
         publish_summary = {
             "status": STATUS_FAILED,
@@ -120,18 +163,21 @@ def run_generated_ingest_checkpoint(
             "streams": [],
             "published_stream_ids": [],
         }
-        return _checkpoint_report(
-            status=STATUS_FAILED,
-            duration_seconds=_duration_since(started_at, clock),
+        return _failed_checkpoint_report(
+            started_at=started_at,
+            clock=clock,
+            env=compose_env,
+            options=selected_options,
             stream_ids=stream_ids,
+            preflight=preflight_summary,
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
             failure_reason=failure_reason,
-            operator_hints=_operator_hints(STATUS_FAILED, failure_reason),
+            run=run,
         )
 
-    publish_summary = _summarize_media_smoke(media_result)
+    publish_summary = _summarize_media_smoke(media_result, runtime_env)
     buffer_summary = _wait_for_buffer_ready(
         runtime_env,
         stream_ids=stream_ids,
@@ -144,24 +190,29 @@ def run_generated_ingest_checkpoint(
     )
     if buffer_summary["status"] != "ready":
         failure_reason = str(buffer_summary["failure_reason"])
-        return _checkpoint_report(
-            status=STATUS_FAILED,
-            duration_seconds=_duration_since(started_at, clock),
+        return _failed_checkpoint_report(
+            started_at=started_at,
+            clock=clock,
+            env=compose_env,
+            options=selected_options,
             stream_ids=stream_ids,
+            preflight=preflight_summary,
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
             failure_reason=failure_reason,
-            operator_hints=_operator_hints(STATUS_FAILED, failure_reason),
+            run=run,
         )
 
     return _checkpoint_report(
         status=STATUS_PASSED,
         duration_seconds=_duration_since(started_at, clock),
         stream_ids=stream_ids,
+        preflight=preflight_summary,
         compose=compose_summary,
         publish=publish_summary,
         buffer=buffer_summary,
+        diagnostics=diagnostics_summary,
         failure_reason=None,
         operator_hints=_operator_hints(STATUS_PASSED, None),
     )
@@ -186,10 +237,30 @@ def main(
         stream_ids=streams,
         skip_compose=args.no_compose or base_options.skip_compose,
         compose_build=False if args.no_build else base_options.compose_build,
+        preflight_timeout_seconds=(
+            args.preflight_timeout_seconds
+            if args.preflight_timeout_seconds is not None
+            else base_options.preflight_timeout_seconds
+        ),
         compose_timeout_seconds=(
             args.compose_timeout_seconds
             if args.compose_timeout_seconds is not None
             else base_options.compose_timeout_seconds
+        ),
+        compose_ready_timeout_seconds=(
+            args.compose_ready_timeout_seconds
+            if args.compose_ready_timeout_seconds is not None
+            else base_options.compose_ready_timeout_seconds
+        ),
+        compose_poll_interval_seconds=(
+            args.compose_poll_interval_seconds
+            if args.compose_poll_interval_seconds is not None
+            else base_options.compose_poll_interval_seconds
+        ),
+        diagnostic_timeout_seconds=(
+            args.diagnostic_timeout_seconds
+            if args.diagnostic_timeout_seconds is not None
+            else base_options.diagnostic_timeout_seconds
         ),
         buffer_ready_timeout_seconds=(
             args.buffer_ready_timeout_seconds
@@ -214,10 +285,30 @@ def options_from_env(env: Mapping[str, str] = os.environ) -> GeneratedIngestOpti
         stream_ids=_stream_ids_from_env(env),
         skip_compose=_env_bool(env, "GENERATED_INGEST_SKIP_COMPOSE", False),
         compose_build=_env_bool(env, "GENERATED_INGEST_COMPOSE_BUILD", True),
+        preflight_timeout_seconds=_env_float(
+            env,
+            "GENERATED_INGEST_PREFLIGHT_TIMEOUT_SECONDS",
+            10.0,
+        ),
         compose_timeout_seconds=_env_float(
             env,
             "GENERATED_INGEST_COMPOSE_TIMEOUT_SECONDS",
             120.0,
+        ),
+        compose_ready_timeout_seconds=_env_float(
+            env,
+            "GENERATED_INGEST_COMPOSE_READY_TIMEOUT_SECONDS",
+            30.0,
+        ),
+        compose_poll_interval_seconds=_env_float(
+            env,
+            "GENERATED_INGEST_COMPOSE_POLL_SECONDS",
+            1.0,
+        ),
+        diagnostic_timeout_seconds=_env_float(
+            env,
+            "GENERATED_INGEST_DIAGNOSTIC_TIMEOUT_SECONDS",
+            10.0,
         ),
         buffer_ready_timeout_seconds=_env_float(
             env,
@@ -237,9 +328,7 @@ def build_compose_command(
     *,
     build: bool = True,
 ) -> list[str]:
-    command = [env.get("DOCKER_EXECUTABLE", "docker"), "compose"]
-    for profile in COMPOSE_PROFILES:
-        command.extend(["--profile", profile])
+    command = _compose_prefix(env)
     command.extend(["up", "-d"])
     if build:
         command.append("--build")
@@ -272,9 +361,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated stream IDs to publish and inspect.",
     )
     parser.add_argument(
+        "--preflight-timeout-seconds",
+        type=float,
+        help="Timeout for each external preflight command. Defaults to env or 10 seconds.",
+    )
+    parser.add_argument(
         "--compose-timeout-seconds",
         type=float,
         help="Timeout for docker compose up. Defaults to env or 120 seconds.",
+    )
+    parser.add_argument(
+        "--compose-ready-timeout-seconds",
+        type=float,
+        help="Time to wait for required Compose services. Defaults to env or 30 seconds.",
+    )
+    parser.add_argument(
+        "--compose-poll-interval-seconds",
+        type=float,
+        help="Polling interval for Compose service readiness. Defaults to env or 1 second.",
+    )
+    parser.add_argument(
+        "--diagnostic-timeout-seconds",
+        type=float,
+        help="Timeout for each failure diagnostic command. Defaults to env or 10 seconds.",
     )
     parser.add_argument(
         "--buffer-ready-timeout-seconds",
@@ -295,79 +404,375 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_preflight(
+    env: Mapping[str, str],
+    options: GeneratedIngestOptions,
+    *,
+    run: RunCallable,
+    probe_writable_path: WritablePathProbe,
+) -> dict[str, object]:
+    docker = env.get("DOCKER_EXECUTABLE", "docker")
+    ffmpeg = env.get("FFMPEG_EXECUTABLE", "ffmpeg")
+    buffer_path = _host_buffer_path(env)
+    requirements = [
+        _run_preflight_command(
+            "docker_engine",
+            [docker, "info", "--format", "{{json .ServerVersion}}"],
+            "Docker Engine is not accessible",
+            env,
+            timeout_seconds=options.preflight_timeout_seconds,
+            run=run,
+        ),
+        _run_preflight_command(
+            "docker_compose",
+            [docker, "compose", "version", "--short"],
+            "Docker Compose plugin is not available",
+            env,
+            timeout_seconds=options.preflight_timeout_seconds,
+            run=run,
+        ),
+        _run_preflight_command(
+            "host_ffmpeg",
+            [ffmpeg, "-version"],
+            "Host FFmpeg is not available",
+            env,
+            timeout_seconds=options.preflight_timeout_seconds,
+            run=run,
+        ),
+        _run_path_preflight(buffer_path, probe_writable_path, env),
+    ]
+    failed = [
+        str(requirement["name"])
+        for requirement in requirements
+        if requirement["status"] == STATUS_FAILED
+    ]
+    failure_reason = None
+    if failed:
+        details = "; ".join(
+            str(requirement["failure_reason"])
+            for requirement in requirements
+            if requirement["status"] == STATUS_FAILED
+        )
+        failure_reason = (
+            f"Preflight requirement failed ({', '.join(failed)}): {details}"
+        )
+    return {
+        "status": STATUS_FAILED if failed else STATUS_PASSED,
+        "timeout_seconds": options.preflight_timeout_seconds,
+        "requirements": requirements,
+        "failed_requirements": failed,
+        "failure_reason": failure_reason,
+    }
+
+
+def _run_preflight_command(
+    name: str,
+    command: Sequence[str],
+    failure_prefix: str,
+    env: Mapping[str, str],
+    *,
+    timeout_seconds: float,
+    run: RunCallable,
+) -> dict[str, object]:
+    result = _run_bounded_command(
+        command,
+        env,
+        timeout_seconds=timeout_seconds,
+        run=run,
+    )
+    status = STATUS_PASSED if result["returncode"] == 0 else STATUS_FAILED
+    detail = _command_failure_detail(result)
+    return {
+        "name": name,
+        "status": status,
+        "command": list(command),
+        "timeout_seconds": timeout_seconds,
+        "returncode": result["returncode"],
+        "stdout": result["stdout"],
+        "stderr": result["stderr"],
+        "failure_reason": (
+            None if status == STATUS_PASSED else f"{failure_prefix}: {detail}"
+        ),
+    }
+
+
+def _run_path_preflight(
+    path: Path,
+    probe_writable_path: WritablePathProbe,
+    env: Mapping[str, str],
+) -> dict[str, object]:
+    try:
+        probe_writable_path(path)
+    except Exception as exc:
+        detail = _redact_exception(exc, env)
+        return {
+            "name": "host_buffer_path",
+            "status": STATUS_FAILED,
+            "path": path.as_posix(),
+            "failure_reason": f"Host buffer path is not writable: {detail}",
+        }
+    return {
+        "name": "host_buffer_path",
+        "status": STATUS_PASSED,
+        "path": path.as_posix(),
+        "failure_reason": None,
+    }
+
+
 def _run_compose_services(
     env: Mapping[str, str],
     options: GeneratedIngestOptions,
     *,
     run: RunCallable,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
 ) -> dict[str, object]:
+    startup_status = STATUS_SKIPPED if options.skip_compose else STATUS_PASSED
+    command = None
+    returncode = None
+    stdout = ""
+    stderr = ""
+
     if options.skip_compose:
-        return {
-            "status": STATUS_SKIPPED,
-            "command": None,
-            "services": list(COMPOSE_SERVICES),
-            "profiles": list(COMPOSE_PROFILES),
-            "cwd": str(PROJECT_DIR),
-            "timeout_seconds": options.compose_timeout_seconds,
-            "returncode": None,
-            "stdout": "",
-            "stderr": "",
-            "failure_reason": None,
-            "reason": "targeting already-running Compose services",
-        }
-
-    command = build_compose_command(env, build=options.compose_build)
-    try:
-        result = run(
+        reason = "targeting already-running Compose services"
+    else:
+        reason = None
+        command = build_compose_command(env, build=options.compose_build)
+        result = _run_bounded_command(
             command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=options.compose_timeout_seconds,
-            cwd=str(PROJECT_DIR),
-            env=dict(env),
+            env,
+            timeout_seconds=options.compose_timeout_seconds,
+            run=run,
         )
-    except subprocess.TimeoutExpired:
-        return {
-            "status": STATUS_FAILED,
-            "command": command,
-            "services": list(COMPOSE_SERVICES),
-            "profiles": list(COMPOSE_PROFILES),
-            "cwd": str(PROJECT_DIR),
-            "timeout_seconds": options.compose_timeout_seconds,
-            "returncode": None,
-            "stdout": "",
-            "stderr": "",
-            "failure_reason": (
-                "Timed out starting Docker Compose services "
-                f"{', '.join(COMPOSE_SERVICES)} after "
-                f"{options.compose_timeout_seconds:g}s."
-            ),
-        }
+        returncode = result["returncode"]
+        stdout = str(result["stdout"])
+        stderr = str(result["stderr"])
+        if returncode != 0:
+            return {
+                "status": STATUS_FAILED,
+                "startup_status": STATUS_FAILED,
+                "command": command,
+                "services": list(COMPOSE_SERVICES),
+                "profiles": list(COMPOSE_PROFILES),
+                "cwd": str(PROJECT_DIR),
+                "timeout_seconds": options.compose_timeout_seconds,
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "service_state": _not_run_summary(
+                    "Compose startup did not complete successfully"
+                ),
+                "failure_reason": (
+                    "Docker Compose failed while starting generated-ingest services: "
+                    f"{_command_failure_detail(result)}"
+                ),
+            }
 
-    stdout = _trim_output(result.stdout or "")
-    stderr = _trim_output(result.stderr or "")
-    failure_reason = None
-    status = STATUS_PASSED
-    if result.returncode != 0:
-        status = STATUS_FAILED
-        failure_reason = (
-            "Docker Compose failed while starting generated-ingest services: "
-            f"{_completed_output(result)}"
-        )
-
+    service_state = _wait_for_compose_ready(
+        env,
+        timeout_seconds=options.compose_ready_timeout_seconds,
+        poll_interval_seconds=options.compose_poll_interval_seconds,
+        command_timeout_seconds=options.preflight_timeout_seconds,
+        run=run,
+        sleep=sleep,
+        clock=clock,
+    )
     return {
-        "status": status,
+        "status": service_state["status"],
+        "startup_status": startup_status,
         "command": command,
         "services": list(COMPOSE_SERVICES),
         "profiles": list(COMPOSE_PROFILES),
         "cwd": str(PROJECT_DIR),
         "timeout_seconds": options.compose_timeout_seconds,
-        "returncode": result.returncode,
+        "returncode": returncode,
         "stdout": stdout,
         "stderr": stderr,
-        "failure_reason": failure_reason,
+        "service_state": service_state,
+        "failure_reason": service_state["failure_reason"],
+        "reason": reason,
     }
+
+
+def _wait_for_compose_ready(
+    env: Mapping[str, str],
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    command_timeout_seconds: float,
+    run: RunCallable,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> dict[str, object]:
+    started_at = clock()
+    deadline = started_at + _finite_nonnegative(timeout_seconds)
+    attempts = 0
+    last_services: dict[str, dict[str, object]] = {}
+    last_reason = "required services were not reported"
+    command = _compose_state_command(env)
+    last_result: dict[str, object] = {
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+        "error": None,
+    }
+
+    while True:
+        attempts += 1
+        now = clock()
+        remaining_seconds = max(0.0, deadline - now)
+        attempt_timeout_seconds = min(
+            _bounded_command_timeout(command_timeout_seconds),
+            max(0.1, remaining_seconds),
+        )
+        last_result = _run_bounded_command(
+            command,
+            env,
+            timeout_seconds=attempt_timeout_seconds,
+            run=run,
+        )
+        if last_result["returncode"] != 0:
+            return {
+                "status": STATUS_FAILED,
+                "command": command,
+                "attempts": attempts,
+                "duration_seconds": _duration_since(started_at, clock),
+                "timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval_seconds,
+                "services": last_services,
+                "returncode": last_result["returncode"],
+                "stdout": last_result["stdout"],
+                "stderr": last_result["stderr"],
+                "failure_reason": (
+                    "Docker Compose service-state query failed: "
+                    f"{_command_failure_detail(last_result)}"
+                ),
+            }
+        try:
+            last_services = _parse_compose_service_state(
+                str(last_result["stdout"])
+            )
+        except ValueError as exc:
+            return {
+                "status": STATUS_FAILED,
+                "command": command,
+                "attempts": attempts,
+                "duration_seconds": _duration_since(started_at, clock),
+                "timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval_seconds,
+                "services": {},
+                "returncode": last_result["returncode"],
+                "stdout": last_result["stdout"],
+                "stderr": last_result["stderr"],
+                "failure_reason": f"Could not parse Docker Compose service state: {exc}",
+            }
+
+        readiness, last_reason = _compose_readiness(last_services)
+        if readiness == "ready":
+            return {
+                "status": STATUS_PASSED,
+                "command": command,
+                "attempts": attempts,
+                "duration_seconds": _duration_since(started_at, clock),
+                "timeout_seconds": timeout_seconds,
+                "poll_interval_seconds": poll_interval_seconds,
+                "services": last_services,
+                "returncode": last_result["returncode"],
+                "stdout": last_result["stdout"],
+                "stderr": last_result["stderr"],
+                "failure_reason": None,
+            }
+        if readiness == "failed":
+            break
+
+        now = clock()
+        if now >= deadline:
+            break
+        sleep(min(max(0.1, poll_interval_seconds), deadline - now))
+
+    return {
+        "status": STATUS_FAILED,
+        "command": command,
+        "attempts": attempts,
+        "duration_seconds": _duration_since(started_at, clock),
+        "timeout_seconds": timeout_seconds,
+        "poll_interval_seconds": poll_interval_seconds,
+        "services": last_services,
+        "returncode": last_result["returncode"],
+        "stdout": last_result["stdout"],
+        "stderr": last_result["stderr"],
+        "failure_reason": f"Docker Compose services are not ready: {last_reason}",
+    }
+
+
+def _parse_compose_service_state(value: str) -> dict[str, dict[str, object]]:
+    stripped = value.strip()
+    if not stripped:
+        return {}
+    records: list[object]
+    try:
+        payload = json.loads(stripped)
+        if isinstance(payload, list):
+            records = payload
+        elif isinstance(payload, Mapping):
+            records = [payload]
+        else:
+            raise ValueError("expected a JSON object, array, or JSON-lines records")
+    except json.JSONDecodeError:
+        try:
+            records = [json.loads(line) for line in stripped.splitlines() if line.strip()]
+        except json.JSONDecodeError as exc:
+            raise ValueError(str(exc)) from exc
+    if any(not isinstance(record, Mapping) for record in records):
+        raise ValueError("Compose service-state records must be JSON objects")
+
+    services: dict[str, dict[str, object]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        service = str(record.get("Service", "") or "")
+        if service not in COMPOSE_SERVICES:
+            continue
+        services[service] = {
+            "name": record.get("Name"),
+            "state": record.get("State"),
+            "health": record.get("Health"),
+            "status": record.get("Status"),
+            "exit_code": record.get("ExitCode"),
+        }
+    return services
+
+
+def _compose_readiness(
+    services: Mapping[str, Mapping[str, object]],
+) -> tuple[str, str]:
+    missing = [service for service in COMPOSE_SERVICES if service not in services]
+    if missing:
+        return "pending", f"missing services: {', '.join(missing)}"
+
+    pending: list[str] = []
+    for service in COMPOSE_SERVICES:
+        details = services[service]
+        state = str(details.get("state") or "").strip().lower()
+        health = str(details.get("health") or "").strip().lower()
+        status = str(details.get("status") or "").strip().lower()
+        terminal_status = any(
+            marker in status
+            for marker in ("exited", "dead", "removing", "restarting")
+        )
+        if state in {"exited", "dead", "removing", "restarting"} or terminal_status:
+            return "failed", f"{service} state={state or 'unknown'} status={status or 'unknown'}"
+        if health == "unhealthy":
+            return "failed", f"{service} health=unhealthy"
+        if state != "running":
+            pending.append(f"{service} state={state or 'unknown'}")
+        elif health in {"starting", "initializing"}:
+            pending.append(f"{service} health={health}")
+        elif health not in {"", "healthy"}:
+            pending.append(f"{service} health={health}")
+    if pending:
+        return "pending", "; ".join(pending)
+    return "ready", ""
 
 
 def _wait_for_buffer_ready(
@@ -382,7 +787,7 @@ def _wait_for_buffer_ready(
     clock: Callable[[], float],
 ) -> dict[str, object]:
     started_at = clock()
-    deadline = started_at + max(0.0, timeout_seconds)
+    deadline = started_at + _finite_nonnegative(timeout_seconds)
     attempts = 0
     last_result: object | None = None
     last_error: str | None = None
@@ -403,7 +808,7 @@ def _wait_for_buffer_ready(
                 last_error=None,
             )
         except Exception as exc:
-            last_error = str(exc) or exc.__class__.__name__
+            last_error = _redact_exception(exc, env)
 
         now = clock()
         if now >= deadline:
@@ -431,9 +836,11 @@ def _checkpoint_report(
     status: str,
     duration_seconds: float,
     stream_ids: Sequence[str],
+    preflight: Mapping[str, object],
     compose: Mapping[str, object],
     publish: Mapping[str, object],
     buffer: Mapping[str, object],
+    diagnostics: Mapping[str, object],
     failure_reason: str | None,
     operator_hints: Sequence[str],
 ) -> dict[str, object]:
@@ -443,11 +850,140 @@ def _checkpoint_report(
         "status": status,
         "duration_seconds": duration_seconds,
         "stream_ids": list(stream_ids),
+        "preflight": dict(preflight),
         "compose": dict(compose),
         "publish": dict(publish),
         "buffer": dict(buffer),
+        "diagnostics": dict(diagnostics),
         "failure_reason": failure_reason,
         "operator_hints": list(operator_hints),
+    }
+
+
+def _failed_checkpoint_report(
+    *,
+    started_at: float,
+    clock: Callable[[], float],
+    env: Mapping[str, str],
+    options: GeneratedIngestOptions,
+    stream_ids: Sequence[str],
+    preflight: Mapping[str, object],
+    compose: Mapping[str, object],
+    publish: Mapping[str, object],
+    buffer: Mapping[str, object],
+    failure_reason: str,
+    run: RunCallable,
+) -> dict[str, object]:
+    try:
+        diagnostics = _collect_failure_diagnostics(
+            env,
+            timeout_seconds=options.diagnostic_timeout_seconds,
+            run=run,
+        )
+    except Exception as exc:
+        detail = _redact_exception(exc, env)
+        diagnostics = {
+            "status": STATUS_FAILED,
+            "timeout_seconds": options.diagnostic_timeout_seconds,
+            "log_tail": DIAGNOSTIC_LOG_TAIL,
+            "service_state": _not_run_summary(
+                "failure diagnostic collection raised an exception"
+            ),
+            "recent_logs": _not_run_summary(
+                "failure diagnostic collection raised an exception"
+            ),
+            "failure_reason": (
+                "Failure diagnostics could not be collected: "
+                f"{detail}"
+            ),
+        }
+    return _checkpoint_report(
+        status=STATUS_FAILED,
+        duration_seconds=_duration_since(started_at, clock),
+        stream_ids=stream_ids,
+        preflight=preflight,
+        compose=compose,
+        publish=publish,
+        buffer=buffer,
+        diagnostics=diagnostics,
+        failure_reason=failure_reason,
+        operator_hints=_operator_hints(STATUS_FAILED, failure_reason),
+    )
+
+
+def _collect_failure_diagnostics(
+    env: Mapping[str, str],
+    *,
+    timeout_seconds: float,
+    run: RunCallable,
+) -> dict[str, object]:
+    state = _run_diagnostic_command(
+        "service_state",
+        _compose_state_command(env),
+        env,
+        timeout_seconds=timeout_seconds,
+        run=run,
+    )
+    logs = _run_diagnostic_command(
+        "recent_logs",
+        [
+            *_compose_prefix(env),
+            "logs",
+            "--no-color",
+            f"--tail={DIAGNOSTIC_LOG_TAIL}",
+            *COMPOSE_SERVICES,
+        ],
+        env,
+        timeout_seconds=timeout_seconds,
+        run=run,
+    )
+    status = (
+        STATUS_PASSED
+        if state["status"] == STATUS_PASSED and logs["status"] == STATUS_PASSED
+        else STATUS_FAILED
+    )
+    return {
+        "status": status,
+        "timeout_seconds": timeout_seconds,
+        "log_tail": DIAGNOSTIC_LOG_TAIL,
+        "service_state": state,
+        "recent_logs": logs,
+        "failure_reason": (
+            None
+            if status == STATUS_PASSED
+            else "One or more Compose diagnostic commands failed."
+        ),
+    }
+
+
+def _run_diagnostic_command(
+    name: str,
+    command: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    timeout_seconds: float,
+    run: RunCallable,
+) -> dict[str, object]:
+    result = _run_bounded_command(
+        command,
+        env,
+        timeout_seconds=timeout_seconds,
+        run=run,
+    )
+    status = STATUS_PASSED if result["returncode"] == 0 else STATUS_FAILED
+    return {
+        "name": name,
+        "status": status,
+        "command": list(command),
+        "timeout_seconds": timeout_seconds,
+        "returncode": result["returncode"],
+        "stdout": result["stdout"],
+        "stderr": result["stderr"],
+        "failure_reason": (
+            None
+            if status == STATUS_PASSED
+            else f"Diagnostic command failed: {_command_failure_detail(result)}"
+        ),
     }
 
 
@@ -465,6 +1001,7 @@ def _not_run_compose_summary(
         "returncode": None,
         "stdout": "",
         "stderr": "",
+        "service_state": _not_run_summary("Compose services have not been inspected"),
         "failure_reason": None,
     }
 
@@ -477,23 +1014,41 @@ def _not_run_summary(reason: str) -> dict[str, object]:
     }
 
 
-def _summarize_media_smoke(result: object) -> dict[str, object]:
+def _summarize_media_smoke(
+    result: object,
+    env: Mapping[str, str],
+) -> dict[str, object]:
     publish_results = tuple(getattr(result, "publish_results", ()) or ())
     return {
         "status": STATUS_PASSED,
-        "summaries": _jsonable(getattr(result, "summaries", None)),
-        "compose_command": _optional_command(getattr(result, "compose_command", None)),
+        "summaries": _redact_jsonable(
+            _jsonable(getattr(result, "summaries", None)),
+            env,
+        ),
+        "compose_command": _redact_jsonable(
+            _optional_command(getattr(result, "compose_command", None)),
+            env,
+        ),
         "published_stream_ids": [
             str(getattr(item, "stream_id", "")) for item in publish_results
         ],
         "streams": [
             {
                 "stream_id": str(getattr(item, "stream_id", "")),
-                "url": getattr(item, "url", None),
-                "command": list(getattr(item, "command", ()) or ()),
+                "url": _redact_jsonable(getattr(item, "url", None), env),
+                "command": _redact_jsonable(
+                    list(getattr(item, "command", ()) or ()),
+                    env,
+                ),
                 "returncode": getattr(item, "returncode", None),
-                "stdout": _trim_output(str(getattr(item, "stdout", "") or "")),
-                "stderr": _trim_output(str(getattr(item, "stderr", "") or "")),
+                "stdout": _redact_output(
+                    str(getattr(item, "stdout", "") or ""),
+                    env,
+                ),
+                "stderr": _redact_output(
+                    str(getattr(item, "stderr", "") or ""),
+                    env,
+                ),
             }
             for item in publish_results
         ],
@@ -552,11 +1107,186 @@ def _runtime_env(env: Mapping[str, str], stream_ids: Sequence[str]) -> dict[str,
     runtime_env.setdefault("SMOKE_PUBLISH_SECONDS", "8")
     runtime_env.setdefault("SMOKE_PUBLISH_TIMEOUT_SECONDS", "20")
     runtime_env.setdefault("SMOKE_READY_TIMEOUT_SECONDS", "30")
-    if "LOOKBACK_BUFFER_DIR" not in runtime_env and runtime_env.get(
-        "LOOKBACK_BUFFER_HOST_DIR"
-    ):
-        runtime_env["LOOKBACK_BUFFER_DIR"] = runtime_env["LOOKBACK_BUFFER_HOST_DIR"]
+    runtime_env["LOOKBACK_BUFFER_DIR"] = _host_buffer_path(env).as_posix()
     return runtime_env
+
+
+def _compose_env(env: Mapping[str, str]) -> dict[str, str]:
+    compose_env = dict(env)
+    if compose_env.get("LOOKBACK_BUFFER_HOST_DIR"):
+        compose_env["LOOKBACK_BUFFER_HOST_DIR"] = _host_buffer_path(env).as_posix()
+    return compose_env
+
+
+def _host_buffer_path(env: Mapping[str, str]) -> Path:
+    value = (
+        env.get("LOOKBACK_BUFFER_HOST_DIR")
+        or env.get("LOOKBACK_BUFFER_DIR")
+        or "/dev/shm/clutchcam"
+    )
+    path = Path(value).expanduser()
+    if not path.is_absolute() and not (
+        os.name == "nt" and _is_posix_root_path_on_windows(path)
+    ):
+        path = PROJECT_DIR / path
+    return path
+
+
+def _probe_writable_path(
+    path: Path,
+    *,
+    platform_name: str | None = None,
+) -> None:
+    selected_platform = platform_name or os.name
+    if selected_platform == "nt" and _is_posix_root_path_on_windows(path):
+        raise OSError(
+            "POSIX-root buffer paths are not host paths on Windows; set "
+            "LOOKBACK_BUFFER_HOST_DIR to a Windows-accessible directory or "
+            "run the checkpoint inside Linux/WSL"
+        )
+    path.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=".generated-ingest-probe-",
+        dir=path,
+    ) as probe:
+        probe.write(b"probe")
+        probe.flush()
+
+
+def _compose_prefix(env: Mapping[str, str]) -> list[str]:
+    command = [env.get("DOCKER_EXECUTABLE", "docker"), "compose"]
+    for profile in COMPOSE_PROFILES:
+        command.extend(["--profile", profile])
+    return command
+
+
+def _compose_state_command(env: Mapping[str, str]) -> list[str]:
+    return [
+        *_compose_prefix(env),
+        "ps",
+        "--all",
+        "--format",
+        "json",
+        *COMPOSE_SERVICES,
+    ]
+
+
+def _run_bounded_command(
+    command: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    timeout_seconds: float,
+    run: RunCallable,
+) -> dict[str, object]:
+    try:
+        result = run(
+            list(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_bounded_command_timeout(timeout_seconds),
+            cwd=str(PROJECT_DIR),
+            env=dict(env),
+        )
+        return {
+            "returncode": result.returncode,
+            "stdout": _redact_output(result.stdout or "", env),
+            "stderr": _redact_output(result.stderr or "", env),
+            "error": None,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "returncode": None,
+            "stdout": _redact_output(_exception_output(exc.stdout), env),
+            "stderr": _redact_output(_exception_output(exc.stderr), env),
+            "error": f"timed out after {timeout_seconds:g}s",
+        }
+    except Exception as exc:
+        return {
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "error": _redact_exception(exc, env),
+        }
+
+
+def _command_failure_detail(result: Mapping[str, object]) -> str:
+    if result.get("error"):
+        return str(result["error"])
+    output = "\n".join(
+        str(part) for part in (result.get("stdout"), result.get("stderr")) if part
+    ).strip()
+    return output or f"exit code {result.get('returncode')}"
+
+
+def _exception_output(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
+def _redact_output(
+    value: str,
+    env: Mapping[str, str],
+    *,
+    limit: int = OUTPUT_LIMIT,
+) -> str:
+    redacted = value
+    for name, secret in env.items():
+        if secret and _is_secret_name(name):
+            redacted = redacted.replace(secret, "[REDACTED]")
+    redacted = re.sub(
+        r"(?i)([\"']?[A-Z0-9_]*(?:API_KEY|PASSWORD|TOKEN|SECRET)"
+        r"[A-Z0-9_]*[\"']?\s*[=:]\s*)"
+        r"(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@",
+        r"\1[REDACTED]@",
+        redacted,
+    )
+    return _trim_output(redacted, limit=limit)
+
+
+def _is_secret_name(name: str) -> bool:
+    upper = name.upper()
+    return any(part in upper for part in ("API_KEY", "PASSWORD", "TOKEN", "SECRET"))
+
+
+def _redact_exception(exc: Exception, env: Mapping[str, str]) -> str:
+    return _redact_output(str(exc) or exc.__class__.__name__, env)
+
+
+def _redact_jsonable(value: object, env: Mapping[str, str]) -> object:
+    if isinstance(value, str):
+        return _redact_output(value, env)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _redact_jsonable(item, env)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_jsonable(item, env) for item in value]
+    return value
+
+
+def _is_posix_root_path_on_windows(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/")
+    return not path.drive and normalized.startswith("/")
+
+
+def _finite_nonnegative(value: float) -> float:
+    return value if math.isfinite(value) and value >= 0.0 else 0.0
+
+
+def _bounded_command_timeout(value: float) -> float:
+    return max(0.1, _finite_nonnegative(value))
 
 
 def _operator_hints(status: str, failure_reason: str | None) -> tuple[str, ...]:
@@ -625,11 +1355,6 @@ def _jsonable(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return repr(value)
-
-
-def _completed_output(result: subprocess.CompletedProcess[str]) -> str:
-    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    return output.strip() or f"exit code {result.returncode}"
 
 
 def _trim_output(value: str, *, limit: int = 2000) -> str:

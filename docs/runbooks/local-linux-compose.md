@@ -43,7 +43,14 @@ cp .env.example .env
 mkdir -p /dev/shm/clutchcam /dev/shm/clutchcam-audio
 docker --version
 docker compose version
+ffmpeg -version
 ```
+
+FFmpeg is required in two places. The generated-ingest checkpoint uses the
+Linux host's `ffmpeg` command to publish bounded test streams. The shared
+ClutchCam worker image installs its own FFmpeg package for `buffer-worker` and
+`transcription-worker`; a host installation is not mounted into those
+containers.
 
 For host-only testing, keep this in `.env`:
 
@@ -310,15 +317,18 @@ python scripts/compose_generated_ingest_checkpoint.py --run
 ```
 
 The first command is intentionally safe and emits a skipped JSON report. The
-`--run` form starts `media-server` and `buffer-worker` with Docker Compose,
-publishes bounded generated FFmpeg RTMP streams, polls buffer metadata, and
-passes only after at least one stream has a resolvable lookback clip. Use
-`--no-compose` to target already-running services, `--streams player_1,player_2`
-to validate multiple players, and
+`--run` form first checks Docker Engine access, the Compose plugin, host
+FFmpeg, and the writable host buffer path. It then starts `media-server` and
+`buffer-worker`, waits for both services to be running and healthy, publishes
+bounded generated FFmpeg RTMP streams, polls buffer metadata, and passes only
+after at least one stream has a resolvable lookback clip. Use `--no-compose` to
+target already-running services, `--streams player_1,player_2` to validate
+multiple players, and
 `GENERATED_INGEST_BUFFER_READY_TIMEOUT_SECONDS` or `SMOKE_PUBLISH_SECONDS` to
 give slower hosts more time. The report includes status, duration, stream IDs,
-Compose and publish summaries, buffer readiness, failure reason, and operator
-hints.
+preflight results, Compose startup and service state, publish summaries, buffer
+readiness, failure reason, and operator hints. Failed live runs also include
+bounded, redacted `docker compose ps` and recent service-log evidence.
 
 Media-server readiness and generated publish:
 
@@ -401,10 +411,15 @@ Missing buffer segments:
 
 - Symptom: `smoke_buffer_worker.py` reports missing `segments.csv`, no segment
   metadata, absent files, `pending`, or `unavailable`.
-- Recover: start the buffer worker before publishing, verify
-  `LOOKBACK_INPUT_URL_PLAYER_N` or `INGEST_API_URL`, check that the stream is
-  live, and confirm `/dev/shm/clutchcam` is writable by the container.
+- Recover: verify `LOOKBACK_INPUT_URL_PLAYER_N` or `INGEST_API_URL`, check that
+  the stream is live, and confirm `/dev/shm/clutchcam` is writable by the
+  container. The buffer worker supervises each stream independently and
+  retries FFmpeg with bounded backoff when a publisher is absent or
+  disconnects; restarting the worker should not normally be required.
 - Inspect: `docker compose logs --tail=100 buffer-worker`.
+- Look for `buffer_ffmpeg_launch_failed`, `buffer_ffmpeg_exited`, and
+  `buffer_ffmpeg_started` entries to distinguish unavailable inputs from
+  successful recovery.
 - If intentionally resetting the buffer, stop `buffer-worker` first, then clear
   only the affected stream directory under `/dev/shm/clutchcam`.
 

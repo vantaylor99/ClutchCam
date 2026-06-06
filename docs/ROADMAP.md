@@ -148,8 +148,11 @@ Success criteria:
 
 Current status: the checkpoint runner, runtime healthcheck entrypoints, AI
 readiness diagnostics, and opt-in generated-ingest Compose checkpoint are
-implemented. The remaining checkpoint gap is running the generated-ingest
-validation on a Linux host with Docker and FFmpeg.
+implemented. Tickets 40-42 closed the pre-acceptance gaps: the worker image now
+installs FFmpeg, the rolling buffer supervises each FFmpeg child across late or
+interrupted inputs, and the checkpoint validates host prerequisites plus
+Compose service state with bounded diagnostics. Ticket 43 is the remaining
+real-Linux acceptance run.
 
 ## Phase 6 - Production Operations
 
@@ -177,6 +180,10 @@ Active implement tickets: none.
 Active plan tickets: none.
 
 Active fix tickets: none.
+
+Active blocked tickets:
+
+- `tickets/blocked/43-linux-generated-ingest-acceptance.md`
 
 Completed review tickets:
 
@@ -222,7 +229,11 @@ Completed review tickets:
 - `tickets/complete/37-latency-budget-and-soak-harness.md`
 - `tickets/complete/38-runtime-config-and-secrets-hardening.md`
 - `tickets/complete/39-openai-compatible-transcription-adapter.md`
+- `tickets/complete/40-docker-runtime-ffmpeg.md`
+- `tickets/complete/41-buffer-worker-ffmpeg-supervision.md`
+- `tickets/complete/42-generated-ingest-preflight-diagnostics.md`
 
 Backlog tickets:
 
 - `tickets/backlog/90-optional-vision-keyframe-analysis.md`
+- `tickets/backlog/44-transcription-ffmpeg-supervision.md`

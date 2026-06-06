@@ -131,8 +131,12 @@ The repo does not yet include:
   full production path by default.
 - A completed live Docker/Linux validation run against real SRS, FFmpeg,
   Faster-Whisper, Ollama, and OBS processes. The opt-in generated-ingest
-  checkpoint exists, but still needs to be run on a Linux host with Docker and
-  FFmpeg.
+  checkpoint is now ready for its first real Linux acceptance run. The shared
+  worker image installs FFmpeg, the rolling-buffer worker supervises late and
+  reconnecting inputs, and the checkpoint performs preflight, service-state
+  validation, and bounded failure diagnostics. Real Linux/Docker evidence has
+  not yet been recorded; ticket 43 is blocked only on access to that external
+  host.
 - PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
 - Live latency/soak runs against real LAN or cloud endpoints. The offline
@@ -189,8 +193,9 @@ Docker, or AI services:
 python -m unittest tests.test_runtime_event_pipeline -v
 ```
 
-The generated-ingest checkpoint defaults to a safe skipped JSON report. The
-live form is opt-in and should be run on Linux with Docker and FFmpeg:
+The generated-ingest checkpoint defaults to a safe skipped JSON report. Tickets
+40-42 have landed, so the live form is ready to run on Linux with Docker Engine,
+the Compose plugin, and host FFmpeg:
 
 ```powershell
 python scripts\compose_generated_ingest_checkpoint.py
