@@ -1,5 +1,5 @@
 import importlib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
@@ -100,9 +100,9 @@ def _local_path_from_file_uri(media_uri: str) -> str:
     parsed = urlparse(media_uri)
     path = unquote(parsed.path)
     if parsed.netloc:
-        path = f"//{parsed.netloc}{path}"
+        return str(PureWindowsPath(f"//{parsed.netloc}{path}"))
     if len(path) >= 3 and path[0] == "/" and path[2] == ":":
-        path = path[1:]
+        return str(PureWindowsPath(path[1:]))
     return str(Path(path))
 
 
