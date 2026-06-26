@@ -12,7 +12,7 @@ services:
     volumes:
       - ./infra/srs.conf:/usr/local/srs/conf/clutchcam.conf:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1985/api/v1/summaries >/dev/null || wget -q -O - http://127.0.0.1:1985/api/v1/summaries >/dev/null"]
+      test: ["CMD-SHELL", "test -s ./objs/srs.pid && kill -0 \"$(cat ./objs/srs.pid)\""]
       interval: 10s
       timeout: 5s
       retries: 12

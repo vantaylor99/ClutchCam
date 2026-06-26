@@ -81,7 +81,9 @@ class LinuxComposeStackTests(unittest.TestCase):
         orchestrator = service_block("orchestrator")
 
         self.assertIn("healthcheck:", media_server)
-        self.assertIn("http://127.0.0.1:1985/api/v1/summaries", media_server)
+        self.assertIn("test -s ./objs/srs.pid", media_server)
+        self.assertIn("kill -0", media_server)
+        self.assertIn("cat ./objs/srs.pid", media_server)
         self.assertIn(
             'test: ["CMD", "python", "-m", "buffer_worker", "--healthcheck"]',
             buffer_worker,
