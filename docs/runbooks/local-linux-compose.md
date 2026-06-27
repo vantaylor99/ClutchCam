@@ -324,14 +324,19 @@ The first command is intentionally safe and emits a skipped JSON report. The
 FFmpeg, and the writable host buffer path. It then starts `media-server` and
 `buffer-worker`, waits for both services to be running and healthy, publishes
 bounded generated FFmpeg RTMP streams, polls buffer metadata, and passes only
-after every requested stream has a resolvable lookback clip. Use `--no-compose`
-to target already-running services, `--streams player_1,player_2` to validate
-multiple players, and
+after every requested stream has a resolvable lookback clip. Add
+`--reconnect-proof` when reconnect acceptance evidence is required: the
+checkpoint waits for the first ready buffer, runs a second bounded publish
+after `--reconnect-gap-seconds`, and passes only if the `buffer-worker`
+service identity stays stable while each requested stream's latest segment
+sequence advances. Use `--no-compose` to target already-running services,
+`--streams player_1,player_2` to validate multiple players, and
 `GENERATED_INGEST_BUFFER_READY_TIMEOUT_SECONDS` or `SMOKE_PUBLISH_SECONDS` to
 give slower hosts more time. The report includes status, duration, stream IDs,
 preflight results, Compose startup and service state, publish summaries, buffer
-readiness, failure reason, and operator hints. Failed live runs also include
-bounded, redacted `docker compose ps` and recent service-log evidence.
+readiness, optional reconnect proof, failure reason, and operator hints.
+Failed live runs also include bounded, redacted `docker compose ps` and recent
+service-log evidence.
 
 For the four-player generated-ingest acceptance path, use:
 
@@ -340,6 +345,23 @@ SMOKE_PUBLISH_SECONDS=12 \
 python scripts/compose_generated_ingest_checkpoint.py --run \
   --streams player_1,player_2,player_3,player_4
 ```
+
+For deterministic reconnect acceptance on one or more streams, use:
+
+```bash
+SMOKE_PUBLISH_SECONDS=8 \
+python scripts/compose_generated_ingest_checkpoint.py --run \
+  --streams player_1 \
+  --reconnect-proof \
+  --reconnect-gap-seconds 2
+```
+
+The reconnect proof's primary signal is data-plane advancement: the latest
+segment sequence after the second publish must be greater than the sequence
+captured after the first ready buffer. `buffer_ffmpeg_exited` and
+`buffer_ffmpeg_started` logs are diagnostic evidence when the FFmpeg child
+actually exits or restarts; they are not required when SRS keeps the RTMP
+consumer process alive across bounded publishers.
 
 Media-server readiness and generated publish:
 
@@ -431,10 +453,10 @@ Missing buffer segments:
 - Look for `buffer_ffmpeg_launch_failed`, `buffer_ffmpeg_exited`, and
   `buffer_ffmpeg_started` entries to distinguish unavailable inputs from
   successful recovery.
-- A reconnect exercise should at minimum prove that the worker container stays
-  alive and the affected stream's segment sequence advances after a second
-  publisher connects. Exact FFmpeg exit/start log evidence is still being
-  tightened under `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`.
+- A reconnect exercise should prove that the worker container identity stays
+  stable and the affected stream's latest segment sequence advances after a
+  second publisher connects. Use `compose_generated_ingest_checkpoint.py
+  --run --reconnect-proof` for machine-verifiable evidence.
 - If intentionally resetting the buffer, stop `buffer-worker` first, then clear
   only the affected stream directory under `/dev/shm/clutchcam`.
 

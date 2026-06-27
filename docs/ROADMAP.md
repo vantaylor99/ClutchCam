@@ -176,19 +176,18 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets: none.
+Active review tickets:
+
+- `tickets/review/43.5-buffer-reconnect-telemetry-proof.md`
 
 Active implement tickets:
 
-- `tickets/implement/44-transcription-ffmpeg-supervision.md`
+- `tickets/implement/45-runtime-transcription-event-source.md`
+- `tickets/implement/45.5-local-linux-live-transcription-opt-in.md`
 
-Active plan tickets:
+Active plan tickets: none.
 
-- `tickets/plan/45-runtime-transcription-event-wiring.md`
-
-Active fix tickets:
-
-- `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`
+Active fix tickets: none.
 
 Active blocked tickets: none.
 
@@ -240,6 +239,7 @@ Completed review tickets:
 - `tickets/complete/41-buffer-worker-ffmpeg-supervision.md`
 - `tickets/complete/42-generated-ingest-preflight-diagnostics.md`
 - `tickets/complete/43-linux-generated-ingest-acceptance.md`
+- `tickets/complete/44-transcription-ffmpeg-supervision.md`
 
 Backlog tickets:
 

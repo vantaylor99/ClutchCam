@@ -46,6 +46,8 @@ class GeneratedIngestOptions:
     stream_ids: tuple[str, ...] = DEFAULT_STREAM_IDS
     skip_compose: bool = False
     compose_build: bool = True
+    reconnect_proof: bool = False
+    reconnect_gap_seconds: float = 2.0
     preflight_timeout_seconds: float = 10.0
     compose_timeout_seconds: float = 120.0
     compose_ready_timeout_seconds: float = 30.0
@@ -79,6 +81,9 @@ def run_generated_ingest_checkpoint(
     buffer_summary: dict[str, object] = _not_run_summary(
         "buffer metadata inspection has not run"
     )
+    reconnect_summary: dict[str, object] = _not_run_summary(
+        "reconnect proof has not run"
+    )
     diagnostics_summary = _not_run_summary(
         "failure diagnostics are collected only for live failures"
     )
@@ -92,6 +97,7 @@ def run_generated_ingest_checkpoint(
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            reconnect=reconnect_summary,
             diagnostics=diagnostics_summary,
             failure_reason=None,
             operator_hints=_operator_hints(
@@ -118,6 +124,7 @@ def run_generated_ingest_checkpoint(
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            reconnect=reconnect_summary,
             failure_reason=str(preflight_summary["failure_reason"]),
             run=run,
         )
@@ -140,6 +147,7 @@ def run_generated_ingest_checkpoint(
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            reconnect=reconnect_summary,
             failure_reason=str(compose_summary["failure_reason"]),
             run=run,
         )
@@ -173,6 +181,7 @@ def run_generated_ingest_checkpoint(
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            reconnect=reconnect_summary,
             failure_reason=failure_reason,
             run=run,
         )
@@ -200,9 +209,45 @@ def run_generated_ingest_checkpoint(
             compose=compose_summary,
             publish=publish_summary,
             buffer=buffer_summary,
+            reconnect=reconnect_summary,
             failure_reason=failure_reason,
             run=run,
         )
+
+    if selected_options.reconnect_proof:
+        base_assert_ready = buffer_assert_ready or _assert_requested_streams_ready(
+            stream_ids
+        )
+        reconnect_summary = _run_reconnect_proof(
+            compose_env=compose_env,
+            runtime_env=runtime_env,
+            options=selected_options,
+            stream_ids=stream_ids,
+            first_compose_state=compose_summary.get("service_state", {}),
+            first_buffer=buffer_summary,
+            run=run,
+            media_smoke=media_smoke or _load_media_smoke(),
+            inspect_buffer=buffer_inspect or _load_buffer_inspect(),
+            base_assert_ready=base_assert_ready,
+            sleep=sleep,
+            clock=clock,
+        )
+        if reconnect_summary["status"] != STATUS_PASSED:
+            failure_reason = str(reconnect_summary["failure_reason"])
+            return _failed_checkpoint_report(
+                started_at=started_at,
+                clock=clock,
+                env=compose_env,
+                options=selected_options,
+                stream_ids=stream_ids,
+                preflight=preflight_summary,
+                compose=compose_summary,
+                publish=publish_summary,
+                buffer=buffer_summary,
+                reconnect=reconnect_summary,
+                failure_reason=failure_reason,
+                run=run,
+            )
 
     return _checkpoint_report(
         status=STATUS_PASSED,
@@ -212,6 +257,7 @@ def run_generated_ingest_checkpoint(
         compose=compose_summary,
         publish=publish_summary,
         buffer=buffer_summary,
+        reconnect=reconnect_summary,
         diagnostics=diagnostics_summary,
         failure_reason=None,
         operator_hints=_operator_hints(STATUS_PASSED, None),
@@ -237,6 +283,12 @@ def main(
         stream_ids=streams,
         skip_compose=args.no_compose or base_options.skip_compose,
         compose_build=False if args.no_build else base_options.compose_build,
+        reconnect_proof=args.reconnect_proof or base_options.reconnect_proof,
+        reconnect_gap_seconds=(
+            args.reconnect_gap_seconds
+            if args.reconnect_gap_seconds is not None
+            else base_options.reconnect_gap_seconds
+        ),
         preflight_timeout_seconds=(
             args.preflight_timeout_seconds
             if args.preflight_timeout_seconds is not None
@@ -285,6 +337,12 @@ def options_from_env(env: Mapping[str, str] = os.environ) -> GeneratedIngestOpti
         stream_ids=_stream_ids_from_env(env),
         skip_compose=_env_bool(env, "GENERATED_INGEST_SKIP_COMPOSE", False),
         compose_build=_env_bool(env, "GENERATED_INGEST_COMPOSE_BUILD", True),
+        reconnect_proof=_env_bool(env, "GENERATED_INGEST_RECONNECT_PROOF", False),
+        reconnect_gap_seconds=_env_float(
+            env,
+            "GENERATED_INGEST_RECONNECT_GAP_SECONDS",
+            2.0,
+        ),
         preflight_timeout_seconds=_env_float(
             env,
             "GENERATED_INGEST_PREFLIGHT_TIMEOUT_SECONDS",
@@ -359,6 +417,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--streams",
         help="Comma-separated stream IDs to publish and inspect.",
+    )
+    parser.add_argument(
+        "--reconnect-proof",
+        action="store_true",
+        help=(
+            "After the first ready buffer, run a second bounded publish and "
+            "require worker identity stability plus segment sequence advancement."
+        ),
+    )
+    parser.add_argument(
+        "--reconnect-gap-seconds",
+        type=float,
+        help="Delay between the first ready buffer and second publish. Defaults to env or 2 seconds.",
     )
     parser.add_argument(
         "--preflight-timeout-seconds",
@@ -734,6 +805,7 @@ def _parse_compose_service_state(value: str) -> dict[str, dict[str, object]]:
         if service not in COMPOSE_SERVICES:
             continue
         services[service] = {
+            "id": record.get("ID") or record.get("Id"),
             "name": record.get("Name"),
             "state": record.get("State"),
             "health": record.get("Health"),
@@ -831,6 +903,365 @@ def _wait_for_buffer_ready(
     )
 
 
+def _run_reconnect_proof(
+    *,
+    compose_env: Mapping[str, str],
+    runtime_env: Mapping[str, str],
+    options: GeneratedIngestOptions,
+    stream_ids: Sequence[str],
+    first_compose_state: object,
+    first_buffer: Mapping[str, object],
+    run: RunCallable,
+    media_smoke: MediaSmokeCallable,
+    inspect_buffer: BufferInspectCallable,
+    base_assert_ready: BufferAssertCallable,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> dict[str, object]:
+    started_at = clock()
+    gap_seconds = _finite_nonnegative(options.reconnect_gap_seconds)
+    if gap_seconds:
+        sleep(gap_seconds)
+
+    publish_summary: dict[str, object]
+    try:
+        media_result = media_smoke(runtime_env, stream_ids=stream_ids)
+    except Exception as exc:
+        detail = _redact_exception(exc, runtime_env)
+        publish_summary = {
+            "status": STATUS_FAILED,
+            "failure_reason": f"Reconnect publish failed: {detail}",
+            "summaries": None,
+            "streams": [],
+            "published_stream_ids": [],
+        }
+        return _reconnect_summary(
+            status=STATUS_FAILED,
+            started_at=started_at,
+            clock=clock,
+            stream_ids=stream_ids,
+            gap_seconds=gap_seconds,
+            publish=publish_summary,
+            buffer=_not_run_summary("reconnect buffer inspection has not run"),
+            compose_service_state=_not_run_summary(
+                "reconnect service state has not been inspected"
+            ),
+            sequence_advancement=_sequence_advancement_summary(
+                first_buffer,
+                None,
+                stream_ids,
+            ),
+            worker_identity=_worker_identity_summary(first_compose_state, None),
+            failure_reason=str(publish_summary["failure_reason"]),
+        )
+
+    publish_summary = _summarize_media_smoke(media_result, runtime_env)
+    advance_assert_ready = _assert_requested_streams_advanced(
+        stream_ids,
+        first_buffer,
+        base_assert_ready=base_assert_ready,
+    )
+    buffer_summary = _wait_for_buffer_ready(
+        runtime_env,
+        stream_ids=stream_ids,
+        timeout_seconds=options.buffer_ready_timeout_seconds,
+        poll_interval_seconds=options.buffer_poll_interval_seconds,
+        inspect_buffer=inspect_buffer,
+        assert_ready=advance_assert_ready,
+        sleep=sleep,
+        clock=clock,
+    )
+    sequence_advancement = _sequence_advancement_summary(
+        first_buffer,
+        buffer_summary,
+        stream_ids,
+    )
+    if buffer_summary["status"] != "ready":
+        failure_reason = str(buffer_summary["failure_reason"])
+        return _reconnect_summary(
+            status=STATUS_FAILED,
+            started_at=started_at,
+            clock=clock,
+            stream_ids=stream_ids,
+            gap_seconds=gap_seconds,
+            publish=publish_summary,
+            buffer=buffer_summary,
+            compose_service_state=_not_run_summary(
+                "reconnect service state has not been inspected"
+            ),
+            sequence_advancement=sequence_advancement,
+            worker_identity=_worker_identity_summary(first_compose_state, None),
+            failure_reason=failure_reason,
+        )
+
+    service_state = _wait_for_compose_ready(
+        compose_env,
+        timeout_seconds=options.compose_ready_timeout_seconds,
+        poll_interval_seconds=options.compose_poll_interval_seconds,
+        command_timeout_seconds=options.preflight_timeout_seconds,
+        run=run,
+        sleep=sleep,
+        clock=clock,
+    )
+    worker_identity = _worker_identity_summary(first_compose_state, service_state)
+    if service_state["status"] != STATUS_PASSED:
+        failure_reason = (
+            "Reconnect proof could not confirm buffer-worker service stayed ready: "
+            f"{service_state['failure_reason']}"
+        )
+        return _reconnect_summary(
+            status=STATUS_FAILED,
+            started_at=started_at,
+            clock=clock,
+            stream_ids=stream_ids,
+            gap_seconds=gap_seconds,
+            publish=publish_summary,
+            buffer=buffer_summary,
+            compose_service_state=service_state,
+            sequence_advancement=sequence_advancement,
+            worker_identity=worker_identity,
+            failure_reason=failure_reason,
+        )
+    if not worker_identity["stable"]:
+        failure_reason = (
+            "Reconnect proof observed buffer-worker identity change: "
+            f"before={worker_identity['before']['identity']!r} "
+            f"after={worker_identity['after']['identity']!r}"
+        )
+        return _reconnect_summary(
+            status=STATUS_FAILED,
+            started_at=started_at,
+            clock=clock,
+            stream_ids=stream_ids,
+            gap_seconds=gap_seconds,
+            publish=publish_summary,
+            buffer=buffer_summary,
+            compose_service_state=service_state,
+            sequence_advancement=sequence_advancement,
+            worker_identity=worker_identity,
+            failure_reason=failure_reason,
+        )
+
+    return _reconnect_summary(
+        status=STATUS_PASSED,
+        started_at=started_at,
+        clock=clock,
+        stream_ids=stream_ids,
+        gap_seconds=gap_seconds,
+        publish=publish_summary,
+        buffer=buffer_summary,
+        compose_service_state=service_state,
+        sequence_advancement=sequence_advancement,
+        worker_identity=worker_identity,
+        failure_reason=None,
+    )
+
+
+def _reconnect_summary(
+    *,
+    status: str,
+    started_at: float,
+    clock: Callable[[], float],
+    stream_ids: Sequence[str],
+    gap_seconds: float,
+    publish: Mapping[str, object],
+    buffer: Mapping[str, object],
+    compose_service_state: Mapping[str, object],
+    sequence_advancement: Mapping[str, object],
+    worker_identity: Mapping[str, object],
+    failure_reason: str | None,
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "criterion": "latest_segment_sequence_advances",
+        "duration_seconds": _duration_since(started_at, clock),
+        "stream_ids": list(stream_ids),
+        "gap_seconds": gap_seconds,
+        "publish": dict(publish),
+        "buffer": dict(buffer),
+        "compose_service_state": dict(compose_service_state),
+        "sequence_advancement": dict(sequence_advancement),
+        "worker_identity": dict(worker_identity),
+        "failure_reason": failure_reason,
+    }
+
+
+def _assert_requested_streams_advanced(
+    stream_ids: Sequence[str],
+    before_buffer: object,
+    *,
+    base_assert_ready: BufferAssertCallable,
+) -> BufferAssertCallable:
+    before_sequences = _latest_sequences_by_stream(before_buffer, stream_ids)
+    expected_stream_ids = tuple(stream_ids)
+
+    def assert_ready(result: object) -> None:
+        base_assert_ready(result)
+        after_sequences = _latest_sequences_by_stream(result, expected_stream_ids)
+        failures = _sequence_advancement_failures(
+            before_sequences,
+            after_sequences,
+            expected_stream_ids,
+        )
+        if failures:
+            raise RuntimeError(
+                "Reconnect proof did not observe segment advancement: "
+                + "; ".join(failures)
+            )
+
+    return assert_ready
+
+
+def _sequence_advancement_summary(
+    before_buffer: object,
+    after_buffer: object | None,
+    stream_ids: Sequence[str],
+) -> dict[str, object]:
+    before_sequences = _latest_sequences_by_stream(before_buffer, stream_ids)
+    after_sequences = _latest_sequences_by_stream(after_buffer, stream_ids)
+    failures = _sequence_advancement_failures(
+        before_sequences,
+        after_sequences,
+        stream_ids,
+    )
+    return {
+        "criterion": "latest_segment_sequence_advances",
+        "streams": [
+            {
+                "stream_id": stream_id,
+                "before_sequence": before_sequences.get(stream_id),
+                "after_sequence": after_sequences.get(stream_id),
+                "advanced": stream_id not in _failed_stream_ids(failures),
+            }
+            for stream_id in stream_ids
+        ],
+        "failure_reason": (
+            None
+            if not failures
+            else "Reconnect proof did not observe segment advancement: "
+            + "; ".join(failures)
+        ),
+    }
+
+
+def _sequence_advancement_failures(
+    before_sequences: Mapping[str, int | None],
+    after_sequences: Mapping[str, int | None],
+    stream_ids: Sequence[str],
+) -> list[str]:
+    failures: list[str] = []
+    for stream_id in stream_ids:
+        before_sequence = before_sequences.get(stream_id)
+        after_sequence = after_sequences.get(stream_id)
+        if before_sequence is None:
+            failures.append(f"{stream_id} before sequence is missing")
+        elif after_sequence is None:
+            failures.append(f"{stream_id} after sequence is missing")
+        elif after_sequence <= before_sequence:
+            failures.append(
+                f"{stream_id} sequence {after_sequence} did not advance "
+                f"beyond {before_sequence}"
+            )
+    return failures
+
+
+def _failed_stream_ids(failures: Sequence[str]) -> set[str]:
+    return {failure.split(" ", 1)[0] for failure in failures}
+
+
+def _latest_sequences_by_stream(
+    buffer_like: object | None,
+    stream_ids: Sequence[str],
+) -> dict[str, int | None]:
+    streams = _buffer_streams_by_id(buffer_like)
+    return {
+        stream_id: _latest_sequence(streams.get(stream_id))
+        for stream_id in stream_ids
+    }
+
+
+def _buffer_streams_by_id(buffer_like: object | None) -> dict[str, object]:
+    if buffer_like is None:
+        return {}
+    streams = _object_field(buffer_like, "streams", ()) or ()
+    result: dict[str, object] = {}
+    for stream in streams:
+        stream_id = str(_object_field(stream, "stream_id", "") or "")
+        if stream_id:
+            result[stream_id] = stream
+    return result
+
+
+def _latest_sequence(stream: object | None) -> int | None:
+    if stream is None:
+        return None
+    latest_segment = _object_field(stream, "latest_segment", None)
+    if latest_segment is None:
+        return None
+    return _coerce_int(_object_field(latest_segment, "sequence", None))
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _worker_identity_summary(
+    before_state: object,
+    after_state: object | None,
+) -> dict[str, object]:
+    before = _compose_service_identity(before_state, "buffer-worker")
+    after = _compose_service_identity(after_state, "buffer-worker")
+    stable = (
+        before["identity"] is not None
+        and after["identity"] is not None
+        and before["identity"] == after["identity"]
+    )
+    return {
+        "service": "buffer-worker",
+        "stable": stable,
+        "before": before,
+        "after": after,
+    }
+
+
+def _compose_service_identity(state: object | None, service: str) -> dict[str, object]:
+    services = _object_field(state, "services", {}) or {}
+    details: object | None = None
+    if isinstance(services, Mapping):
+        details = services.get(service)
+    identity = None
+    identity_source = None
+    if details is not None:
+        for key, source in (("id", "container_id"), ("name", "container_name")):
+            value = _object_field(details, key, None)
+            if value:
+                identity = str(value)
+                identity_source = source
+                break
+    return {
+        "identity": identity,
+        "identity_source": identity_source,
+        "state": _object_field(details, "state", None) if details is not None else None,
+        "health": _object_field(details, "health", None) if details is not None else None,
+        "status": _object_field(details, "status", None) if details is not None else None,
+    }
+
+
+def _object_field(value: object, name: str, default: object = None) -> object:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
 def _checkpoint_report(
     *,
     status: str,
@@ -840,6 +1271,7 @@ def _checkpoint_report(
     compose: Mapping[str, object],
     publish: Mapping[str, object],
     buffer: Mapping[str, object],
+    reconnect: Mapping[str, object],
     diagnostics: Mapping[str, object],
     failure_reason: str | None,
     operator_hints: Sequence[str],
@@ -854,6 +1286,7 @@ def _checkpoint_report(
         "compose": dict(compose),
         "publish": dict(publish),
         "buffer": dict(buffer),
+        "reconnect": dict(reconnect),
         "diagnostics": dict(diagnostics),
         "failure_reason": failure_reason,
         "operator_hints": list(operator_hints),
@@ -873,6 +1306,7 @@ def _failed_checkpoint_report(
     buffer: Mapping[str, object],
     failure_reason: str,
     run: RunCallable,
+    reconnect: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     try:
         diagnostics = _collect_failure_diagnostics(
@@ -905,6 +1339,7 @@ def _failed_checkpoint_report(
         compose=compose,
         publish=publish,
         buffer=buffer,
+        reconnect=reconnect or _not_run_summary("reconnect proof has not run"),
         diagnostics=diagnostics,
         failure_reason=failure_reason,
         operator_hints=_operator_hints(STATUS_FAILED, failure_reason),

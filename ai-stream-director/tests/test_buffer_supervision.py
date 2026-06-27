@@ -174,13 +174,30 @@ class BufferSupervisionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             buffer = self._buffer(temp_dir, process_factory=process_factory)
-            buffer.start()
-            try:
-                self.assertTrue(_wait_until(lambda: launches == 2))
-            finally:
-                buffer.stop()
+            with self.assertLogs("services.buffer", level="INFO") as logs:
+                buffer.start()
+                try:
+                    self.assertTrue(_wait_until(lambda: launches == 2))
+                finally:
+                    buffer.stop()
 
         self.assertTrue(replacement_process.terminated)
+        diagnostics = "\n".join(logs.output)
+        start_logs = [
+            message
+            for message in logs.output
+            if "buffer_ffmpeg_started" in message
+        ]
+        exit_logs = [
+            message
+            for message in logs.output
+            if "buffer_ffmpeg_exited" in message
+        ]
+        self.assertEqual(len(start_logs), 2, diagnostics)
+        self.assertEqual(len(exit_logs), 1, diagnostics)
+        self.assertIn("stream=player_1", exit_logs[0])
+        self.assertIn("pid=", exit_logs[0])
+        self.assertIn("restart_delay_seconds=", exit_logs[0])
 
     def test_launch_failure_retries_and_logs_without_input_url(self) -> None:
         input_url = "rtmp://user:secret@localhost/live/player_1"

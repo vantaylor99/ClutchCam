@@ -73,6 +73,8 @@ class FakeBufferResult:
 
 def compose_ps_output(
     *,
+    media_id: str = "media-container-1",
+    buffer_id: str = "buffer-container-1",
     media_state: str = "running",
     media_health: str = "healthy",
     buffer_state: str = "running",
@@ -81,6 +83,7 @@ def compose_ps_output(
     return json.dumps(
         [
             {
+                "ID": media_id,
                 "Service": "media-server",
                 "Name": "ai-stream-director-media-server",
                 "State": media_state,
@@ -89,6 +92,7 @@ def compose_ps_output(
                 "ExitCode": 0,
             },
             {
+                "ID": buffer_id,
                 "Service": "buffer-worker",
                 "Name": "ai-stream-director-buffer-worker",
                 "State": buffer_state,
@@ -170,23 +174,31 @@ def fake_media_result(*stream_ids: str) -> FakeMediaResult:
 
 
 def ready_buffer_result(buffer_root: str = "/dev/shm/clutchcam") -> FakeBufferResult:
+    return ready_buffer_result_with_sequence(1, buffer_root=buffer_root)
+
+
+def ready_buffer_result_with_sequence(
+    sequence: int,
+    *,
+    buffer_root: str = "/dev/shm/clutchcam",
+) -> FakeBufferResult:
     return FakeBufferResult(
         buffer_root=buffer_root,
         streams=(
             FakeStream(
                 stream_id="player_1",
-                segment_count=2,
+                segment_count=sequence + 1,
                 latest_segment=FakeLatestSegment(
-                    path=f"{buffer_root}/player_1/000000001.ts",
+                    path=f"{buffer_root}/player_1/{sequence:09d}.ts",
                     start_time_seconds=2.0,
                     end_time_seconds=4.0,
-                    sequence=1,
+                    sequence=sequence,
                     exists=True,
                 ),
                 clip_status="ready",
                 clip_media_uri=f"file://{buffer_root}/player_1/clips/clip.m3u8",
                 clip_reason="",
-                segment_uris=(f"file://{buffer_root}/player_1/000000001.ts",),
+                segment_uris=(f"file://{buffer_root}/player_1/{sequence:09d}.ts",),
             ),
         ),
     )
@@ -214,6 +226,7 @@ class ComposeGeneratedIngestCheckpointTests(unittest.TestCase):
         self.assertEqual(report["compose"]["status"], "not_run")
         self.assertEqual(report["publish"]["status"], "not_run")
         self.assertEqual(report["buffer"]["status"], "not_run")
+        self.assertEqual(report["reconnect"]["status"], "not_run")
         self.assertEqual(report["diagnostics"]["status"], "not_run")
         self.assertTrue(
             {
@@ -329,6 +342,152 @@ class ComposeGeneratedIngestCheckpointTests(unittest.TestCase):
         self.assertEqual(report["buffer"]["ready_streams"], ["player_1"])
         self.assertEqual(report["buffer"]["streams"][0]["clip_status"], "ready")
         self.assertEqual(report["diagnostics"]["status"], "not_run")
+
+    def test_reconnect_proof_publishes_twice_and_requires_segment_advancement(self) -> None:
+        calls = []
+        runner = FakeCommandRunner(
+            ps_outputs=(
+                compose_ps_output(buffer_id="buffer-worker-stable"),
+                compose_ps_output(buffer_id="buffer-worker-stable"),
+            )
+        )
+        buffer_results = iter(
+            (
+                ready_buffer_result_with_sequence(1),
+                ready_buffer_result_with_sequence(4),
+            )
+        )
+
+        def media_smoke(env, *, stream_ids):
+            calls.append(("media", dict(env), tuple(stream_ids)))
+            return fake_media_result(*stream_ids)
+
+        def inspect_buffer(env, *, stream_ids):
+            calls.append(("buffer", dict(env), tuple(stream_ids)))
+            return next(buffer_results)
+
+        report = checkpoint.run_generated_ingest_checkpoint(
+            {},
+            options=checkpoint.GeneratedIngestOptions(
+                run=True,
+                skip_compose=True,
+                reconnect_proof=True,
+                reconnect_gap_seconds=0,
+                buffer_ready_timeout_seconds=0,
+            ),
+            run=runner,
+            probe_writable_path=lambda path: None,
+            media_smoke=media_smoke,
+            buffer_inspect=inspect_buffer,
+            sleep=lambda seconds: None,
+        )
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual([call[0] for call in calls], ["media", "buffer", "media", "buffer"])
+        self.assertEqual(report["reconnect"]["status"], "passed")
+        self.assertEqual(
+            report["reconnect"]["criterion"],
+            "latest_segment_sequence_advances",
+        )
+        self.assertEqual(
+            report["reconnect"]["sequence_advancement"]["streams"],
+            [
+                {
+                    "stream_id": "player_1",
+                    "before_sequence": 1,
+                    "after_sequence": 4,
+                    "advanced": True,
+                }
+            ],
+        )
+        self.assertTrue(report["reconnect"]["worker_identity"]["stable"])
+        self.assertEqual(
+            report["reconnect"]["worker_identity"]["before"]["identity"],
+            "buffer-worker-stable",
+        )
+        self.assertEqual(
+            report["reconnect"]["publish"]["published_stream_ids"],
+            ["player_1"],
+        )
+
+    def test_reconnect_proof_fails_when_segment_sequence_does_not_advance(self) -> None:
+        runner = FakeCommandRunner()
+        buffer_results = iter(
+            (
+                ready_buffer_result_with_sequence(7),
+                ready_buffer_result_with_sequence(7),
+            )
+        )
+
+        report = checkpoint.run_generated_ingest_checkpoint(
+            {},
+            options=checkpoint.GeneratedIngestOptions(
+                run=True,
+                skip_compose=True,
+                reconnect_proof=True,
+                reconnect_gap_seconds=0,
+                buffer_ready_timeout_seconds=0,
+            ),
+            run=runner,
+            probe_writable_path=lambda path: None,
+            media_smoke=lambda env, *, stream_ids: fake_media_result(*stream_ids),
+            buffer_inspect=lambda env, *, stream_ids: next(buffer_results),
+            sleep=lambda seconds: None,
+        )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["reconnect"]["status"], "failed")
+        self.assertEqual(report["reconnect"]["buffer"]["status"], "failed")
+        self.assertFalse(
+            report["reconnect"]["sequence_advancement"]["streams"][0]["advanced"]
+        )
+        self.assertIn("segment advancement", report["failure_reason"])
+        self.assertIn("did not advance", report["reconnect"]["buffer"]["last_error"])
+        self.assertEqual(report["diagnostics"]["status"], "passed")
+
+    def test_reconnect_proof_fails_when_worker_identity_changes(self) -> None:
+        runner = FakeCommandRunner(
+            ps_outputs=(
+                compose_ps_output(buffer_id="buffer-worker-before"),
+                compose_ps_output(buffer_id="buffer-worker-after"),
+            )
+        )
+        buffer_results = iter(
+            (
+                ready_buffer_result_with_sequence(2),
+                ready_buffer_result_with_sequence(5),
+            )
+        )
+
+        report = checkpoint.run_generated_ingest_checkpoint(
+            {},
+            options=checkpoint.GeneratedIngestOptions(
+                run=True,
+                skip_compose=True,
+                reconnect_proof=True,
+                reconnect_gap_seconds=0,
+                buffer_ready_timeout_seconds=0,
+            ),
+            run=runner,
+            probe_writable_path=lambda path: None,
+            media_smoke=lambda env, *, stream_ids: fake_media_result(*stream_ids),
+            buffer_inspect=lambda env, *, stream_ids: next(buffer_results),
+            sleep=lambda seconds: None,
+        )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["reconnect"]["status"], "failed")
+        self.assertFalse(report["reconnect"]["worker_identity"]["stable"])
+        self.assertIn("identity change", report["failure_reason"])
+        self.assertEqual(
+            report["reconnect"]["worker_identity"]["before"]["identity"],
+            "buffer-worker-before",
+        )
+        self.assertEqual(
+            report["reconnect"]["worker_identity"]["after"]["identity"],
+            "buffer-worker-after",
+        )
+        self.assertEqual(report["diagnostics"]["status"], "passed")
 
     def test_multi_stream_run_requires_every_requested_stream_ready(self) -> None:
         runner = FakeCommandRunner()
@@ -494,6 +653,10 @@ class ComposeGeneratedIngestCheckpointTests(unittest.TestCase):
                 self.assertEqual(
                     checkpoint._compose_readiness(services),
                     ("ready", ""),
+                )
+                self.assertEqual(
+                    services["buffer-worker"]["id"],
+                    "buffer-container-1",
                 )
 
         with self.assertRaisesRegex(ValueError, "JSON object"):
@@ -719,6 +882,17 @@ class ComposeGeneratedIngestCheckpointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["status"], "skipped")
+
+    def test_options_from_env_includes_reconnect_proof_controls(self) -> None:
+        options = checkpoint.options_from_env(
+            {
+                "GENERATED_INGEST_RECONNECT_PROOF": "true",
+                "GENERATED_INGEST_RECONNECT_GAP_SECONDS": "3.5",
+            }
+        )
+
+        self.assertTrue(options.reconnect_proof)
+        self.assertEqual(options.reconnect_gap_seconds, 3.5)
 
     def test_skipped_report_honors_configured_docker_executable(self) -> None:
         report = checkpoint.run_generated_ingest_checkpoint(
