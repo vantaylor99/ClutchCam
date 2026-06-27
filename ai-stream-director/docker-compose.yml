@@ -112,7 +112,7 @@ services:
     volumes:
       - ${FASTER_WHISPER_CACHE_HOST_DIR:-faster-whisper-cache}:/root/.cache/huggingface
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1', 8000), 3); s.close()\""]
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.create_connection(('127.0.0.1', 8000), 3); s.close()\""]
       interval: 10s
       timeout: 5s
       retries: 12

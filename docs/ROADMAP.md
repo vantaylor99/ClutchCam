@@ -242,6 +242,7 @@ Completed review tickets:
 - `tickets/complete/44-transcription-ffmpeg-supervision.md`
 - `tickets/complete/45-runtime-transcription-event-source.md`
 - `tickets/complete/45.5-local-linux-live-transcription-opt-in.md`
+- `tickets/complete/45.6-faster-whisper-healthcheck-python3.md`
 
 Backlog tickets:
 

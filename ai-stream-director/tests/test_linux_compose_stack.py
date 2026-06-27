@@ -234,6 +234,7 @@ class LinuxComposeStackTests(unittest.TestCase):
             "/root/.cache/huggingface",
             faster_whisper,
         )
+        self.assertIn("python3 -c", faster_whisper)
         self.assertIn("socket.create_connection", faster_whisper)
         self.assertIn("faster-whisper-cache:", compose)
 
