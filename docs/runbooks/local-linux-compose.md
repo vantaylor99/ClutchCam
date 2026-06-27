@@ -29,6 +29,9 @@ audio extraction and Faster-Whisper requests for the same player feeds. Set
 `LIVE_TRANSCRIPTION_ENABLED=true` when the orchestrator should own live
 transcript events; run `transcription-worker` separately only for diagnostic
 JSONL output.
+For transcript quality evaluation, set `TRANSCRIPT_LOG_TEXT_ENABLED=true` to
+log accepted runtime transcript text before prefiltering. Keep it off for
+normal runs unless everyone involved expects speech to appear in logs.
 
 The local Faster-Whisper server is opt-in through the `local-transcription`
 profile and is not part of the default local Linux runtime. Keep
@@ -164,6 +167,7 @@ Run the orchestrator with live transcription and dry-run OBS after
 ```bash
 DRY_RUN_OBS=true \
 LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPT_LOG_TEXT_ENABLED=true \
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
 COMPOSE_PROFILES=local-linux \
 docker compose run --rm orchestrator

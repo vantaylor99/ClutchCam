@@ -77,6 +77,7 @@ Production defaults remain environment-driven through `config.py`, including
 `TRANSCRIPTION_MODEL`, `TRANSCRIPTION_LANGUAGE`,
 `TRANSCRIPTION_RESPONSE_FORMAT`, `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`,
 `LIVE_TRANSCRIPTION_ENABLED`, `LIVE_TRANSCRIPTION_QUEUE_SIZE`,
+`TRANSCRIPT_LOG_TEXT_ENABLED`, `TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS`,
 `GEMMA_API_URL`, `GEMMA_MODEL`, optional `GEMMA_API_KEY`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
@@ -155,6 +156,10 @@ The integrated local Linux path keeps one transcription owner. When
 timestamps before the local trigger prefilter and AI director run. The
 standalone Compose `transcription-worker` service remains an explicit JSONL
 diagnostic and healthcheck path, not part of the default `local-linux` profile.
+Accepted runtime transcript text can be logged for evaluation by setting
+`TRANSCRIPT_LOG_TEXT_ENABLED=true`; it is off by default because transcripts can
+contain private player speech. `TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS` bounds each
+logged transcript line.
 
 Docker Compose can optionally start a local service named `faster-whisper`
 behind the `local-transcription` profile. The documented default image is

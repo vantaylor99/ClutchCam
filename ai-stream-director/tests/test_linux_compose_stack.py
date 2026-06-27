@@ -152,6 +152,15 @@ class LinuxComposeStackTests(unittest.TestCase):
             orchestrator,
         )
         self.assertIn(
+            "TRANSCRIPT_LOG_TEXT_ENABLED: ${TRANSCRIPT_LOG_TEXT_ENABLED:-false}",
+            orchestrator,
+        )
+        self.assertIn(
+            "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS: "
+            "${TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS:-160}",
+            orchestrator,
+        )
+        self.assertIn(
             "AUDIO_INPUT_URL_PLAYER_1: "
             "${AUDIO_INPUT_URL_PLAYER_1:-rtmp://media-server:1935/live/player_1}",
             orchestrator,
@@ -260,6 +269,8 @@ class LinuxComposeStackTests(unittest.TestCase):
         )
         self.assertIn("LIVE_TRANSCRIPTION_ENABLED=false", env_example)
         self.assertIn("LIVE_TRANSCRIPTION_QUEUE_SIZE=16", env_example)
+        self.assertIn("TRANSCRIPT_LOG_TEXT_ENABLED=false", env_example)
+        self.assertIn("TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS=160", env_example)
         self.assertIn(
             "# TRANSCRIPTION_API_URL=http://faster-whisper:8000",
             env_example,
@@ -288,6 +299,7 @@ class LinuxComposeStackTests(unittest.TestCase):
         self.assertIn("fedirz/faster-whisper-server", docs)
         self.assertIn("<TRANSCRIPTION_API_URL>/transcribe", docs)
         self.assertIn("/v1/audio/transcriptions", docs)
+        self.assertIn("TRANSCRIPT_LOG_TEXT_ENABLED", docs)
 
 
 if __name__ == "__main__":

@@ -61,6 +61,8 @@ The MVP supports:
   `LIVE_TRANSCRIPTION_ENABLED=true`, final transcript events from the
   transcription worker boundary feed the existing router, prefilter, AI
   director, scheduler, and switch-target construction path.
+- Opt-in bounded transcript text logging for runtime transcript evaluation via
+  `TRANSCRIPT_LOG_TEXT_ENABLED`; it is disabled by default.
 - Local Linux Compose defaults that keep the standalone `transcription-worker`
   as an explicit diagnostic path instead of starting it alongside orchestrator
   live transcription.
@@ -78,6 +80,8 @@ Production-oriented configuration has been introduced:
 - `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
+- `TRANSCRIPT_LOG_TEXT_ENABLED`
+- `TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS`
 - Optional local transcription service settings: `FASTER_WHISPER_IMAGE`,
   `FASTER_WHISPER_BIND_ADDR`, `FASTER_WHISPER_PORT`,
   `FASTER_WHISPER_MODEL`, `FASTER_WHISPER_DEVICE`,

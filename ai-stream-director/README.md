@@ -400,12 +400,17 @@ TRANSCRIPTION_RESPONSE_FORMAT=json
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
 LIVE_TRANSCRIPTION_ENABLED=false
 LIVE_TRANSCRIPTION_QUEUE_SIZE=16
+TRANSCRIPT_LOG_TEXT_ENABLED=false
+TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS=160
 ```
 
 The adapter is unit-tested with mocked HTTP responses and does not require a
 live Faster-Whisper container for local validation. `src/main.py` starts the
 in-process live source only when `LIVE_TRANSCRIPTION_ENABLED=true`; otherwise
 the terminal prompt remains the transcript source.
+For transcript quality evaluation, `TRANSCRIPT_LOG_TEXT_ENABLED=true` logs
+accepted runtime transcript text before prefiltering. Keep it disabled for
+normal runs because player speech can be sensitive.
 
 ## Standalone Transcription Worker Diagnostics
 
@@ -612,6 +617,7 @@ the orchestrator is the only audio extraction owner:
 ```bash
 DRY_RUN_OBS=true \
 LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPT_LOG_TEXT_ENABLED=true \
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
 COMPOSE_PROFILES=local-linux \
 docker compose run --rm orchestrator

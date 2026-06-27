@@ -73,6 +73,8 @@ class RuntimeTranscriptEventHandler:
         trigger_prefilter: TranscriptTriggerPrefilter | None = None,
         output_switcher: OutputSwitcher | None = None,
         switch_lookback_seconds: int = 15,
+        log_transcript_text: bool = False,
+        transcript_log_text_max_characters: int = 160,
         log=print,
     ) -> None:
         self.transcript_router = transcript_router
@@ -81,6 +83,8 @@ class RuntimeTranscriptEventHandler:
         self.trigger_prefilter = trigger_prefilter
         self.output_switcher = output_switcher
         self.switch_lookback_seconds = switch_lookback_seconds
+        self.log_transcript_text = log_transcript_text
+        self.transcript_log_text_max_characters = transcript_log_text_max_characters
         self.log = log
 
     def __call__(self, event: TranscriptEvent) -> RuntimeTranscriptEventResult | None:
@@ -92,6 +96,8 @@ class RuntimeTranscriptEventHandler:
             trigger_prefilter=self.trigger_prefilter,
             output_switcher=self.output_switcher,
             switch_lookback_seconds=self.switch_lookback_seconds,
+            log_transcript_text=self.log_transcript_text,
+            transcript_log_text_max_characters=self.transcript_log_text_max_characters,
             log=self.log,
         )
         if not result.accepted:
@@ -345,6 +351,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         trigger_prefilter=trigger_prefilter,
         live_transcription_source=live_transcription_source,
         switch_lookback_seconds=config.switch_lookback_seconds,
+        log_transcript_text=config.transcript_log_text_enabled,
+        transcript_log_text_max_characters=config.transcript_log_text_max_characters,
         log=terminal_output.log,
     )
 
@@ -398,6 +406,8 @@ def run_orchestrator_loop(
     live_transcription_source: LiveTranscriptionSource | None = None,
     output_switcher: OutputSwitcher | None = None,
     switch_lookback_seconds: int = 15,
+    log_transcript_text: bool = False,
+    transcript_log_text_max_characters: int = 160,
     tick_interval_seconds: float = TICK_INTERVAL_SECONDS,
     log=print,
 ) -> int:
@@ -408,6 +418,8 @@ def run_orchestrator_loop(
         trigger_prefilter=trigger_prefilter,
         output_switcher=output_switcher,
         switch_lookback_seconds=switch_lookback_seconds,
+        log_transcript_text=log_transcript_text,
+        transcript_log_text_max_characters=transcript_log_text_max_characters,
         log=log,
     )
 
@@ -519,6 +531,8 @@ def process_transcript_event(
     trigger_prefilter: TranscriptTriggerPrefilter | None = None,
     output_switcher: OutputSwitcher | None = None,
     switch_lookback_seconds: int = 15,
+    log_transcript_text: bool = False,
+    transcript_log_text_max_characters: int = 160,
     log=print,
 ) -> RuntimeTranscriptEventResult:
     if not event.is_final:
@@ -536,6 +550,14 @@ def process_transcript_event(
             reason="router_rejected",
         )
 
+    if log_transcript_text:
+        log(
+            format_transcript_text_log(
+                message,
+                max_characters=transcript_log_text_max_characters,
+            )
+        )
+
     return evaluate_accepted_transcript(
         message=message,
         transcript_router=transcript_router,
@@ -546,6 +568,24 @@ def process_transcript_event(
         switch_lookback_seconds=switch_lookback_seconds,
         log=log,
     )
+
+
+def format_transcript_text_log(
+    message: TranscriptMessage,
+    *,
+    max_characters: int,
+) -> str:
+    text = _truncate_transcript_text_for_log(message.text, max_characters)
+    return f"Transcript text from {message.speaker}: {text}"
+
+
+def _truncate_transcript_text_for_log(text: str, max_characters: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= max_characters:
+        return normalized
+    if max_characters <= 3:
+        return normalized[:max_characters]
+    return normalized[: max_characters - 3].rstrip() + "..."
 
 
 def evaluate_accepted_transcript(

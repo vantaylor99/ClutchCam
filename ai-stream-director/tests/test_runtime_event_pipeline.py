@@ -99,6 +99,79 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertEqual(router.get_recent_context_text(), "player_2: holy cow, look at this")
         self.assertIn("AI evaluation skipped because AI mode is off", output.getvalue())
 
+    def test_runtime_event_does_not_log_transcript_text_by_default(self) -> None:
+        scheduler = _started_scheduler()
+        scheduler.set_ai_enabled(False)
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        output = io.StringIO()
+
+        process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="secret strat callout",
+                start_time_seconds=14.0,
+                end_time_seconds=15.0,
+            ),
+            router,
+            Mock(),
+            scheduler,
+            log=lambda message: print(message, file=output),
+        )
+
+        logs = output.getvalue()
+        self.assertNotIn("Transcript text from", logs)
+        self.assertNotIn("secret strat callout", logs)
+
+    def test_runtime_event_logs_transcript_text_when_enabled(self) -> None:
+        scheduler = _started_scheduler()
+        scheduler.set_ai_enabled(False)
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        output = io.StringIO()
+
+        process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="holy   cow\nthat was unreal",
+                start_time_seconds=14.0,
+                end_time_seconds=15.0,
+            ),
+            router,
+            Mock(),
+            scheduler,
+            log_transcript_text=True,
+            log=lambda message: print(message, file=output),
+        )
+
+        self.assertIn(
+            "Transcript text from player_2: holy cow that was unreal",
+            output.getvalue(),
+        )
+
+    def test_runtime_event_truncates_logged_transcript_text(self) -> None:
+        scheduler = _started_scheduler()
+        scheduler.set_ai_enabled(False)
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        output = io.StringIO()
+
+        process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_1",
+                text="abcdefghijklmnopqrstuvwxyz",
+                start_time_seconds=14.0,
+                end_time_seconds=15.0,
+            ),
+            router,
+            Mock(),
+            scheduler,
+            log_transcript_text=True,
+            transcript_log_text_max_characters=10,
+            log=lambda message: print(message, file=output),
+        )
+
+        logs = output.getvalue()
+        self.assertIn("Transcript text from player_1: abcdefg...", logs)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz", logs)
+
     def test_cooldown_runtime_event_skips_model_call_after_routing(self) -> None:
         scheduler = _started_scheduler(min_switch_interval_seconds=8)
         scheduler.last_switch_time = time.time()

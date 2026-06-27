@@ -110,6 +110,10 @@ class DryRunOBSConfigTests(unittest.TestCase):
                 {"LIVE_TRANSCRIPTION_QUEUE_SIZE": "0"},
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE must be positive",
             ),
+            (
+                {"TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "0"},
+                "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS must be positive",
+            ),
         )
 
         for env, message in cases:
@@ -221,6 +225,8 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.transcription_api_url, "http://faster-whisper:8000")
         self.assertFalse(config.live_transcription_enabled)
         self.assertEqual(config.live_transcription_queue_size, 16)
+        self.assertFalse(config.transcript_log_text_enabled)
+        self.assertEqual(config.transcript_log_text_max_characters, 160)
         self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
         self.assertEqual(config.lookback_window_seconds, 30)
         self.assertEqual(config.switch_lookback_seconds, 15)
@@ -257,6 +263,8 @@ class DryRunOBSConfigTests(unittest.TestCase):
             {
                 "LIVE_TRANSCRIPTION_ENABLED": "true",
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE": "3",
+                "TRANSCRIPT_LOG_TEXT_ENABLED": "true",
+                "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "42",
             },
             clear=True,
         ):
@@ -264,6 +272,8 @@ class DryRunOBSConfigTests(unittest.TestCase):
 
         self.assertTrue(config.live_transcription_enabled)
         self.assertEqual(config.live_transcription_queue_size, 3)
+        self.assertTrue(config.transcript_log_text_enabled)
+        self.assertEqual(config.transcript_log_text_max_characters, 42)
 
 
 class DryRunOBSControllerTests(unittest.TestCase):
