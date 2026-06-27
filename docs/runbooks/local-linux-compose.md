@@ -3,8 +3,11 @@
 Use this path on a Linux host when validating the local media-server, buffer,
 transcription adapter, AI endpoint, and dry-run orchestrator boundaries. The
 stack is useful for event rehearsal, but full live Linux validation across SRS,
-FFmpeg, transcription, AI, and real OBS playback still needs to be run on
-event hardware.
+FFmpeg, transcription, AI, and real OBS playback still needs to be completed on
+event hardware. Generated RTMP validation across SRS, FFmpeg, the rolling
+buffer, local Ollama, and the dry-run orchestrator has passed on
+`clutchcam-media-1`; see the completed Linux generated-ingest acceptance ticket
+for retained evidence.
 
 ## What This Runs
 
@@ -321,14 +324,22 @@ The first command is intentionally safe and emits a skipped JSON report. The
 FFmpeg, and the writable host buffer path. It then starts `media-server` and
 `buffer-worker`, waits for both services to be running and healthy, publishes
 bounded generated FFmpeg RTMP streams, polls buffer metadata, and passes only
-after at least one stream has a resolvable lookback clip. Use `--no-compose` to
-target already-running services, `--streams player_1,player_2` to validate
+after every requested stream has a resolvable lookback clip. Use `--no-compose`
+to target already-running services, `--streams player_1,player_2` to validate
 multiple players, and
 `GENERATED_INGEST_BUFFER_READY_TIMEOUT_SECONDS` or `SMOKE_PUBLISH_SECONDS` to
 give slower hosts more time. The report includes status, duration, stream IDs,
 preflight results, Compose startup and service state, publish summaries, buffer
 readiness, failure reason, and operator hints. Failed live runs also include
 bounded, redacted `docker compose ps` and recent service-log evidence.
+
+For the four-player generated-ingest acceptance path, use:
+
+```bash
+SMOKE_PUBLISH_SECONDS=12 \
+python scripts/compose_generated_ingest_checkpoint.py --run \
+  --streams player_1,player_2,player_3,player_4
+```
 
 Media-server readiness and generated publish:
 
@@ -420,6 +431,10 @@ Missing buffer segments:
 - Look for `buffer_ffmpeg_launch_failed`, `buffer_ffmpeg_exited`, and
   `buffer_ffmpeg_started` entries to distinguish unavailable inputs from
   successful recovery.
+- A reconnect exercise should at minimum prove that the worker container stays
+  alive and the affected stream's segment sequence advances after a second
+  publisher connects. Exact FFmpeg exit/start log evidence is still being
+  tightened under `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`.
 - If intentionally resetting the buffer, stop `buffer-worker` first, then clear
   only the affected stream directory under `/dev/shm/clutchcam`.
 

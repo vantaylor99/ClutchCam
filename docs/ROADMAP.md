@@ -131,28 +131,31 @@ Success criteria:
 - Visual analysis can confirm or reject ambiguous transcript hype without
   destabilizing the live switching path.
 
-## Next Checkpoint - Local Generated Stream Validation
+## Next Checkpoint - Live Transcription Runtime Validation
 
-Purpose: before adding more product behavior, prove the local stack can be
-started and diagnosed with generated media and bounded smoke commands.
+Purpose: now that generated media can exercise SRS and the rolling buffer on a
+real Linux host, connect live transcription to the existing director path
+without regressing the terminal MVP.
 
 Success criteria:
 
 - The Python unit suite remains green.
-- A single checkpoint runner can execute or skip each smoke boundary and produce
-  a structured report.
-- An opt-in Docker Compose checkpoint can publish a generated RTMP stream,
-  produce buffer segments in `/dev/shm`, and resolve a lookback clip.
-- AI and transcription endpoints fail with clear operator guidance when they are
+- FFmpeg audio extraction survives late and reconnecting streams.
+- Live transcription output becomes normalized `TranscriptEvent` input.
+- The existing local prefilter, AI director, scheduler, and dry-run switcher can
+  consume live transcript events without changing the terminal command path.
+- Transcription and AI endpoints fail with clear operator guidance when they are
   not configured.
 
 Current status: the checkpoint runner, runtime healthcheck entrypoints, AI
 readiness diagnostics, and opt-in generated-ingest Compose checkpoint are
-implemented. Tickets 40-42 closed the pre-acceptance gaps: the worker image now
-installs FFmpeg, the rolling buffer supervises each FFmpeg child across late or
-interrupted inputs, and the checkpoint validates host prerequisites plus
-Compose service state with bounded diagnostics. Ticket 43 is the remaining
-real-Linux acceptance run.
+implemented. Tickets 40-43 closed the generated-ingest acceptance path on
+Linux: the worker image installs FFmpeg, the rolling buffer supervises each
+FFmpeg child across late or interrupted inputs, the checkpoint validates host
+prerequisites plus Compose service state with bounded diagnostics, and the
+Linux server accepted generated RTMP for all four stable player streams. The
+checkpoint now requires every requested stream to resolve a clip. The remaining
+local stack work is transcription supervision and runtime event wiring.
 
 ## Phase 6 - Production Operations
 
@@ -175,15 +178,19 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets: none.
+Active implement tickets:
 
-Active plan tickets: none.
+- `tickets/implement/44-transcription-ffmpeg-supervision.md`
 
-Active fix tickets: none.
+Active plan tickets:
 
-Active blocked tickets:
+- `tickets/plan/45-runtime-transcription-event-wiring.md`
 
-- `tickets/blocked/43-linux-generated-ingest-acceptance.md`
+Active fix tickets:
+
+- `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`
+
+Active blocked tickets: none.
 
 Completed review tickets:
 
@@ -232,8 +239,8 @@ Completed review tickets:
 - `tickets/complete/40-docker-runtime-ffmpeg.md`
 - `tickets/complete/41-buffer-worker-ffmpeg-supervision.md`
 - `tickets/complete/42-generated-ingest-preflight-diagnostics.md`
+- `tickets/complete/43-linux-generated-ingest-acceptance.md`
 
 Backlog tickets:
 
 - `tickets/backlog/90-optional-vision-keyframe-analysis.md`
-- `tickets/backlog/44-transcription-ffmpeg-supervision.md`

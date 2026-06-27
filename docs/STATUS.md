@@ -1,6 +1,6 @@
 # Current Project Status
 
-Last updated: 2026-06-05.
+Last updated: 2026-06-27.
 
 ## What Exists
 
@@ -129,14 +129,13 @@ The repo does not yet include:
   extraction, transcription, AI orchestration, and switching together.
 - Configuration/runtime wiring that injects the OBS media-source adapter into a
   full production path by default.
-- A completed live Docker/Linux validation run against real SRS, FFmpeg,
-  Faster-Whisper, Ollama, and OBS processes. The opt-in generated-ingest
-  checkpoint is now ready for its first real Linux acceptance run. The shared
-  worker image installs FFmpeg, the rolling-buffer worker supervises late and
-  reconnecting inputs, and the checkpoint performs preflight, service-state
-  validation, and bounded failure diagnostics. Real Linux/Docker evidence has
-  not yet been recorded; ticket 43 is blocked only on access to that external
-  host.
+- A completed live Docker/Linux validation run that includes real
+  Faster-Whisper transcription and OBS playback. Live generated-ingest
+  validation against SRS, FFmpeg, the rolling buffer, Ollama, and the dry-run
+  orchestrator has passed on `clutchcam-media-1`; evidence is recorded in
+  `tickets/complete/43-linux-generated-ingest-acceptance.md`. Reconnect data
+  plane behavior looked healthy, but deterministic reconnect telemetry remains
+  tracked in `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`.
 - PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
 - Live latency/soak runs against real LAN or cloud endpoints. The offline
@@ -194,13 +193,18 @@ python -m unittest tests.test_runtime_event_pipeline -v
 ```
 
 The generated-ingest checkpoint defaults to a safe skipped JSON report. Tickets
-40-42 have landed, so the live form is ready to run on Linux with Docker Engine,
-the Compose plugin, and host FFmpeg:
+40-43 have landed, and the live form has passed on Linux with Docker Engine,
+the Compose plugin, host FFmpeg, SRS, and the rolling buffer:
 
 ```powershell
 python scripts\compose_generated_ingest_checkpoint.py
 python scripts\compose_generated_ingest_checkpoint.py --run
+python scripts\compose_generated_ingest_checkpoint.py --run --streams player_1,player_2,player_3,player_4
 ```
+
+When multiple streams are requested, the checkpoint now requires every
+requested stream to resolve a clip; a single ready stream no longer satisfies a
+multi-stream run.
 
 Final terminal-MVP dry-run review passed for calm transcript input, a focused
 player moment, cooldown rejection, manual overrides, `/ai off`, `/ai on`,

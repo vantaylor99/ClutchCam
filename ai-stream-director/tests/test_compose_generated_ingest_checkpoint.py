@@ -330,6 +330,49 @@ class ComposeGeneratedIngestCheckpointTests(unittest.TestCase):
         self.assertEqual(report["buffer"]["streams"][0]["clip_status"], "ready")
         self.assertEqual(report["diagnostics"]["status"], "not_run")
 
+    def test_multi_stream_run_requires_every_requested_stream_ready(self) -> None:
+        runner = FakeCommandRunner()
+
+        def media_smoke(env, *, stream_ids):
+            return fake_media_result("player_1", "player_2")
+
+        def inspect_buffer(env, *, stream_ids):
+            return FakeBufferResult(
+                buffer_root="/dev/shm/clutchcam",
+                streams=(
+                    ready_buffer_result().streams[0],
+                    FakeStream(
+                        stream_id="player_2",
+                        segment_count=0,
+                        latest_segment=None,
+                        clip_status="unavailable",
+                        clip_media_uri=None,
+                        clip_reason="No segment metadata for stream.",
+                        segment_uris=(),
+                    ),
+                ),
+            )
+
+        report = checkpoint.run_generated_ingest_checkpoint(
+            {},
+            options=checkpoint.GeneratedIngestOptions(
+                run=True,
+                stream_ids=("player_1", "player_2"),
+                buffer_ready_timeout_seconds=0,
+            ),
+            run=runner,
+            probe_writable_path=lambda path: None,
+            media_smoke=media_smoke,
+            buffer_inspect=inspect_buffer,
+            sleep=lambda seconds: None,
+        )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["buffer"]["status"], "failed")
+        self.assertEqual(report["buffer"]["ready_streams"], ["player_1"])
+        self.assertIn("Not all requested streams", report["failure_reason"])
+        self.assertIn("player_2=unavailable", report["failure_reason"])
+
     def test_compose_timeout_reports_failure_without_publishing(self) -> None:
         runner = FakeCommandRunner(compose_up_timeout=True)
 

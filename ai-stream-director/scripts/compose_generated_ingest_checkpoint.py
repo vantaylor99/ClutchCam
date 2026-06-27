@@ -184,7 +184,7 @@ def run_generated_ingest_checkpoint(
         timeout_seconds=selected_options.buffer_ready_timeout_seconds,
         poll_interval_seconds=selected_options.buffer_poll_interval_seconds,
         inspect_buffer=buffer_inspect or _load_buffer_inspect(),
-        assert_ready=buffer_assert_ready or _load_buffer_assert_ready(),
+        assert_ready=buffer_assert_ready or _assert_requested_streams_ready(stream_ids),
         sleep=sleep,
         clock=clock,
     )
@@ -1390,6 +1390,39 @@ def _load_buffer_inspect() -> BufferInspectCallable:
 def _load_buffer_assert_ready() -> BufferAssertCallable:
     module = _import_script_module("smoke_buffer_worker")
     return module.assert_any_ready
+
+
+def _assert_requested_streams_ready(stream_ids: Sequence[str]) -> BufferAssertCallable:
+    expected_stream_ids = tuple(stream_ids)
+
+    def assert_ready(result: object) -> None:
+        streams = tuple(getattr(result, "streams", ()) or ())
+        by_stream_id = {
+            str(getattr(stream, "stream_id", "")): stream for stream in streams
+        }
+        failures: list[str] = []
+        for stream_id in expected_stream_ids:
+            stream = by_stream_id.get(stream_id)
+            if stream is None:
+                failures.append(f"{stream_id}=missing from buffer inspection")
+                continue
+            clip_status = str(getattr(stream, "clip_status", ""))
+            if clip_status != "ready":
+                clip_reason = str(getattr(stream, "clip_reason", "") or "")
+                failures.append(f"{stream_id}={clip_status}: {clip_reason}")
+                continue
+            latest_segment = getattr(stream, "latest_segment", None)
+            latest_exists = getattr(latest_segment, "exists", False)
+            if not latest_exists:
+                failures.append(f"{stream_id}=ready but latest segment is missing")
+        if failures:
+            buffer_root = getattr(result, "buffer_root", "<unknown>")
+            raise RuntimeError(
+                "Not all requested streams have resolvable clips under "
+                f"{buffer_root}. " + "; ".join(failures)
+            )
+
+    return assert_ready
 
 
 def _import_script_module(module_name: str) -> Any:
