@@ -57,6 +57,13 @@ The MVP supports:
   with a resolved buffered clip URI before cutting to the target scene.
 - FFmpeg audio extraction supervision for late or reconnecting live inputs,
   using bounded restart backoff and per-stream isolation.
+- An opt-in in-process live transcription source for the orchestrator. When
+  `LIVE_TRANSCRIPTION_ENABLED=true`, final transcript events from the
+  transcription worker boundary feed the existing router, prefilter, AI
+  director, scheduler, and switch-target construction path.
+- Local Linux Compose defaults that keep the standalone `transcription-worker`
+  as an explicit diagnostic path instead of starting it alongside orchestrator
+  live transcription.
 - Operator runbooks under `docs/runbooks/` for terminal dry-run setup, local
   Linux Compose setup, smoke checks, OBS scene preparation, stream publishing,
   recovery from common local event failures, and Linux/cloud deployment
@@ -98,9 +105,9 @@ The shared contracts currently define:
 - `SwitcherTarget`, including optional resolved buffered media URI
 
 These contracts are partially wired into service boundaries, but not yet into a
-single end-to-end production runtime. Normalized transcript events now have an
-orchestrator sink, but the transcription worker is not yet connected to a live
-transport into that sink.
+fully validated end-to-end production runtime. Normalized transcript events now
+have an orchestrator sink, and the transcription worker can run in process as an
+opt-in live source for that sink.
 
 The `src/services/` package defines lightweight boundaries for:
 
@@ -127,8 +134,9 @@ workflows available.
 
 The repo does not yet include:
 
-- A single end-to-end runtime that starts media ingest, FFmpeg buffering, audio
-  extraction, transcription, AI orchestration, and switching together.
+- A fully validated live runtime that starts media ingest, FFmpeg buffering,
+  audio extraction, transcription, AI orchestration, and switching together
+  against real endpoints and OBS playback.
 - Configuration/runtime wiring that injects the OBS media-source adapter into a
   full production path by default.
 - A completed live Docker/Linux validation run that includes real

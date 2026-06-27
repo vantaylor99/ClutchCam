@@ -161,6 +161,7 @@ class TranscriptionWorker:
         | None = None,
         discovery: CompletedAudioChunkDiscovery | None = None,
         stop_event: threading.Event | None = None,
+        started_event: threading.Event | None = None,
         poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
         wait: Callable[[float], bool] | None = None,
         fail_fast: bool = False,
@@ -175,6 +176,7 @@ class TranscriptionWorker:
             extractor,
         )
         self.stop_event = stop_event or threading.Event()
+        self.started_event = started_event
         self.poll_interval_seconds = float(poll_interval_seconds)
         self._wait = wait or self.stop_event.wait
         self._pump = TranscriptionRuntimePump(
@@ -190,8 +192,10 @@ class TranscriptionWorker:
         return summary
 
     def run_forever(self) -> None:
-        self.extractor.start()
         try:
+            self.extractor.start()
+            if self.started_event is not None:
+                self.started_event.set()
             while not self.stop_event.is_set():
                 self.run_once()
                 if self._wait(self.poll_interval_seconds):
@@ -243,7 +247,11 @@ def build_worker(
     *,
     app_config: AppConfig | None = None,
     stdout: TextIO | None = None,
+    sink: TranscriptEventSink | None = None,
+    failure_sink: Callable[[TranscriptionRuntimeFailure], object | None]
+    | None = None,
     stop_event: threading.Event | None = None,
+    started_event: threading.Event | None = None,
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     fail_fast: bool = False,
 ) -> TranscriptionWorker:
@@ -256,9 +264,12 @@ def build_worker(
         extraction_config=extraction_config,
         extractor=extractor,
         transcriber=transcriber,
-        sink=jsonl_sink,
-        failure_sink=jsonl_sink.write_failure,
+        sink=sink or jsonl_sink,
+        failure_sink=(
+            failure_sink if failure_sink is not None else jsonl_sink.write_failure
+        ),
         stop_event=stop_event,
+        started_event=started_event,
         poll_interval_seconds=poll_interval_seconds,
         fail_fast=fail_fast,
     )

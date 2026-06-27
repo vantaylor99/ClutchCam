@@ -76,11 +76,17 @@ Production defaults remain environment-driven through `config.py`, including
 `TRANSCRIPTION_REQUEST_MODE`, `TRANSCRIPTION_ENDPOINT_PATH`,
 `TRANSCRIPTION_MODEL`, `TRANSCRIPTION_LANGUAGE`,
 `TRANSCRIPTION_RESPONSE_FORMAT`, `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`,
+`LIVE_TRANSCRIPTION_ENABLED`, `LIVE_TRANSCRIPTION_QUEUE_SIZE`,
 `GEMMA_API_URL`, `GEMMA_MODEL`, optional `GEMMA_API_KEY`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
+Live transcription and the standalone diagnostic worker also use
+`AUDIO_EXTRACT_DIR`, `AUDIO_EXTRACT_SAMPLE_RATE`, `AUDIO_EXTRACT_CHANNELS`,
+`AUDIO_EXTRACT_CHUNK_SECONDS`, `AUDIO_EXTRACT_CODEC`,
+`AUDIO_EXTRACT_CONTAINER`, and optional `AUDIO_INPUT_URL_PLAYER_1` through
+`AUDIO_INPUT_URL_PLAYER_4` overrides.
 For the Compose stack, `INGEST_API_URL` points workers at
 `rtmp://media-server:1935/live` so stream records resolve through Docker service
 DNS instead of host-published ports.
@@ -139,12 +145,16 @@ extracted audio chunks to `<TRANSCRIPTION_API_URL>/v1/audio/transcriptions`
 when `TRANSCRIPTION_REQUEST_MODE=openai-compatible`. It normalizes common text
 and segment response shapes, shifts chunk-relative timestamps, uses audio chunk
 duration when text-only responses omit segment timestamps, and emits
-`TranscriptEvent` objects. The terminal MVP does not yet start the extractor or
-transcriber at runtime, but the orchestrator now exposes an import-safe
-`RuntimeTranscriptEventHandler` boundary
-that can be used as a normalized event sink. Runtime events are routed through
+`TranscriptEvent` objects.
+
+The integrated local Linux path keeps one transcription owner. When
+`LIVE_TRANSCRIPTION_ENABLED=true`, the orchestrator starts an in-process
+`TranscriptionWorker` source and routes final events through the import-safe
+`RuntimeTranscriptEventHandler`. Runtime events are routed through
 `TranscriptRouter.add_event(...)`, preserving stream IDs and media end
-timestamps before the local trigger prefilter and AI director run.
+timestamps before the local trigger prefilter and AI director run. The
+standalone Compose `transcription-worker` service remains an explicit JSONL
+diagnostic and healthcheck path, not part of the default `local-linux` profile.
 
 Docker Compose can optionally start a local service named `faster-whisper`
 behind the `local-transcription` profile. The documented default image is
@@ -257,7 +267,12 @@ cloud GPU inference should all be selected by environment variables:
 - `TRANSCRIPTION_LANGUAGE`
 - `TRANSCRIPTION_RESPONSE_FORMAT`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
+- `LIVE_TRANSCRIPTION_ENABLED`
+- `LIVE_TRANSCRIPTION_QUEUE_SIZE`
 - `INGEST_API_URL`
+- `FFMPEG_EXECUTABLE`
+- `AUDIO_EXTRACT_DIR`
+- `AUDIO_INPUT_URL_PLAYER_1` through `AUDIO_INPUT_URL_PLAYER_4`
 
 `OLLAMA_BASE_URL` and `OLLAMA_MODEL` remain accepted compatibility aliases for
 the current MVP.

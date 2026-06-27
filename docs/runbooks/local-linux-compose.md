@@ -15,11 +15,20 @@ The Compose stack currently provides:
 
 - `media-server`: local SRS RTMP/SRT ingest and HTTP inspection.
 - `buffer-worker`: FFmpeg rolling lookback segments under `/dev/shm/clutchcam`.
-- `transcription-worker`: FFmpeg audio chunks plus calls to a configured
-  Faster-Whisper-compatible HTTP endpoint.
-- `orchestrator`: the terminal MVP, with real or dry-run OBS switching.
+- `orchestrator`: the terminal MVP, real or dry-run OBS switching, and an
+  opt-in in-process live transcription source.
+- `transcription-worker`: explicit JSONL diagnostics for FFmpeg audio chunks
+  plus calls to a configured Faster-Whisper-compatible HTTP endpoint.
 - `ollama` and `ollama-pull`: optional local AI profile.
 - `faster-whisper`: optional local transcription server profile.
+
+The integrated `local-linux` profile starts the media server, rolling buffer,
+and orchestrator path. It does not start `transcription-worker`, because live
+orchestrator transcription and the standalone worker would otherwise duplicate
+audio extraction and Faster-Whisper requests for the same player feeds. Set
+`LIVE_TRANSCRIPTION_ENABLED=true` when the orchestrator should own live
+transcript events; run `transcription-worker` separately only for diagnostic
+JSONL output.
 
 The local Faster-Whisper server is opt-in through the `local-transcription`
 profile and is not part of the default local Linux runtime. Keep
@@ -51,9 +60,9 @@ ffmpeg -version
 
 FFmpeg is required in two places. The generated-ingest checkpoint uses the
 Linux host's `ffmpeg` command to publish bounded test streams. The shared
-ClutchCam worker image installs its own FFmpeg package for `buffer-worker` and
-`transcription-worker`; a host installation is not mounted into those
-containers.
+ClutchCam runtime image installs its own FFmpeg package for `buffer-worker`,
+`orchestrator` live transcription, and `transcription-worker` diagnostics; a
+host installation is not mounted into those containers.
 
 For host-only testing, keep this in `.env`:
 
@@ -99,7 +108,7 @@ or secret fields before JSON output.
 Start SRS and the rolling buffer:
 
 ```bash
-COMPOSE_PROFILES=media-server,buffer-worker \
+COMPOSE_PROFILES=local-linux \
 docker compose up -d --build media-server buffer-worker
 ```
 
@@ -140,9 +149,30 @@ FASTER_WHISPER_COMPUTE_TYPE=float16
 FASTER_WHISPER_DEVICE_INDEX=0
 ```
 
-Start the transcription worker in the default JSON-reference mode only when
-`TRANSCRIPTION_API_URL` points at a reachable service or adapter exposing
-`/transcribe`:
+Run the orchestrator in terminal-only dry-run OBS mode:
+
+```bash
+DRY_RUN_OBS=true \
+LIVE_TRANSCRIPTION_ENABLED=false \
+COMPOSE_PROFILES=local-linux \
+docker compose run --rm orchestrator
+```
+
+Run the orchestrator with live transcription and dry-run OBS after
+`TRANSCRIPTION_API_URL` points at a reachable service:
+
+```bash
+DRY_RUN_OBS=true \
+LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
+COMPOSE_PROFILES=local-linux \
+docker compose run --rm orchestrator
+```
+
+Start the standalone transcription worker in the default JSON-reference mode
+only when `TRANSCRIPTION_API_URL` points at a reachable service or adapter
+exposing `/transcribe`. This is a diagnostic path, not part of the integrated
+`local-linux` profile:
 
 ```bash
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
@@ -179,14 +209,6 @@ curl http://127.0.0.1:8000/v1/audio/transcriptions \
   -F "model=Systran/faster-whisper-small"
 ```
 
-Run the orchestrator in dry-run OBS mode:
-
-```bash
-DRY_RUN_OBS=true \
-COMPOSE_PROFILES=orchestrator \
-docker compose run --rm orchestrator
-```
-
 Run it against real OBS only after OBS WebSocket and scenes are ready:
 
 ```bash
@@ -194,7 +216,7 @@ DRY_RUN_OBS=false \
 OBS_HOST=host.docker.internal \
 OBS_PORT=4455 \
 OBS_PASSWORD='<obs-websocket-password>' \
-COMPOSE_PROFILES=orchestrator \
+COMPOSE_PROFILES=local-linux \
 docker compose run --rm orchestrator
 ```
 
@@ -463,7 +485,9 @@ Missing buffer segments:
 Unavailable transcription service:
 
 - Symptom: `smoke_transcription_api.py` fails at `/transcribe`, or
-  `transcription-worker` emits `transcription_failure` JSON lines.
+  live orchestrator transcription reports chunk failures. The standalone
+  `transcription-worker` diagnostic path may also emit `transcription_failure`
+  JSON lines.
 - Recover: start the external Faster-Whisper-compatible service, verify
   `TRANSCRIPTION_API_URL` from the host and from the container, and use
   `host.docker.internal` for a host service reached from Compose.

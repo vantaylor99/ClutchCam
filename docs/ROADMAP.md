@@ -58,13 +58,15 @@ the existing decision/scheduler boundary.
 Deliverables:
 
 - Audio extraction per stream. First FFmpeg command/scaffolding implementation
-  exists behind `services.transcription`; runtime wiring is still pending.
+  exists behind `services.transcription`; supervised runtime wiring is now
+  available through the transcription worker boundary.
 - Faster-Whisper API adapter configured by `TRANSCRIPTION_API_URL`. First HTTP
   adapter implementation exists behind `services.transcription`, including the
   default JSON-reference mode and opt-in OpenAI-compatible multipart uploads;
-  runtime wiring is still pending.
+  the orchestrator can now use it through the live transcription source when
+  enabled.
 - `TranscriptEvent` ingestion path. `TranscriptRouter.add_event(...)` exists so
-  runtime code can feed normalized events without changing the terminal MVP
+  runtime code can feed normalized events without changing the typed terminal
   input path.
 - Partial/final transcript handling in normalized transcript events.
 - Error handling for unavailable, slow, or malformed transcription services.
@@ -154,8 +156,10 @@ Linux: the worker image installs FFmpeg, the rolling buffer supervises each
 FFmpeg child across late or interrupted inputs, the checkpoint validates host
 prerequisites plus Compose service state with bounded diagnostics, and the
 Linux server accepted generated RTMP for all four stable player streams. The
-checkpoint now requires every requested stream to resolve a clip. The remaining
-local stack work is transcription supervision and runtime event wiring.
+checkpoint now requires every requested stream to resolve a clip. Ticket 44
+added supervised transcription FFmpeg extraction, and ticket 45 adds an opt-in
+orchestrator live transcription source that feeds final transcript events into
+the existing AI/scheduler path.
 
 ## Phase 6 - Production Operations
 
@@ -178,10 +182,7 @@ Success criteria:
 
 Active review tickets: none.
 
-Active implement tickets:
-
-- `tickets/implement/45-runtime-transcription-event-source.md`
-- `tickets/implement/45.5-local-linux-live-transcription-opt-in.md`
+Active implement tickets: none.
 
 Active plan tickets: none.
 
@@ -239,6 +240,8 @@ Completed review tickets:
 - `tickets/complete/43-linux-generated-ingest-acceptance.md`
 - `tickets/complete/43.5-buffer-reconnect-telemetry-proof.md`
 - `tickets/complete/44-transcription-ffmpeg-supervision.md`
+- `tickets/complete/45-runtime-transcription-event-source.md`
+- `tickets/complete/45.5-local-linux-live-transcription-opt-in.md`
 
 Backlog tickets:
 

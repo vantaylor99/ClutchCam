@@ -43,12 +43,15 @@ class FakeDiscovery:
 
 
 class FakeExtractor:
-    def __init__(self) -> None:
+    def __init__(self, start_error: Exception | None = None) -> None:
+        self.start_error = start_error
         self.starts = 0
         self.stops = 0
 
     def start(self) -> None:
         self.starts += 1
+        if self.start_error is not None:
+            raise self.start_error
 
     def stop(self) -> None:
         self.stops += 1
@@ -243,6 +246,26 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         worker.run_forever()
 
         self.assertTrue(stop_event.is_set())
+        self.assertEqual(extractor.starts, 1)
+        self.assertEqual(extractor.stops, 1)
+
+    def test_startup_failure_still_stops_extractor(self) -> None:
+        extractor = FakeExtractor(start_error=RuntimeError("input unavailable"))
+        worker = TranscriptionWorker(
+            extraction_config=AudioExtractionConfig(
+                output_dir="audio-cache",
+                stream_input_urls={"player_1": "x"},
+                stream_ids=("player_1",),
+            ),
+            extractor=extractor,
+            transcriber=FakeTranscriber([]),
+            sink=lambda event: event,
+            discovery=FakeDiscovery(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "input unavailable"):
+            worker.run_forever()
+
         self.assertEqual(extractor.starts, 1)
         self.assertEqual(extractor.stops, 1)
 

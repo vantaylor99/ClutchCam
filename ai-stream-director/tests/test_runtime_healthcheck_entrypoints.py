@@ -280,6 +280,8 @@ def _app_config(**overrides) -> AppConfig:
         "transcription_language": "",
         "transcription_response_format": "json",
         "transcription_request_timeout_seconds": 30.0,
+        "live_transcription_enabled": False,
+        "live_transcription_queue_size": 16,
         "gemma_api_url": "http://ollama:11434",
         "gemma_model": "gemma3:4b",
         "gemma_api_key": "",

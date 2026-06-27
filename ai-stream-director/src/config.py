@@ -71,6 +71,8 @@ class AppConfig:
     transcription_language: str
     transcription_response_format: str
     transcription_request_timeout_seconds: float
+    live_transcription_enabled: bool
+    live_transcription_queue_size: int
     gemma_api_url: str
     gemma_model: str
     gemma_api_key: str
@@ -143,6 +145,10 @@ def get_config() -> AppConfig:
             "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
             "30",
         ),
+        live_transcription_enabled=_parse_bool(
+            os.getenv("LIVE_TRANSCRIPTION_ENABLED", "false")
+        ),
+        live_transcription_queue_size=_env_int("LIVE_TRANSCRIPTION_QUEUE_SIZE", "16"),
         gemma_api_url=_compat_env(
             primary_name="GEMMA_API_URL",
             fallback_name="OLLAMA_BASE_URL",
@@ -264,6 +270,10 @@ def validate_config(config: AppConfig) -> None:
     _require_positive(
         "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
         config.transcription_request_timeout_seconds,
+    )
+    _require_positive_int(
+        "LIVE_TRANSCRIPTION_QUEUE_SIZE",
+        config.live_transcription_queue_size,
     )
     _validate_path_setting("LOOKBACK_BUFFER_DIR", config.lookback_buffer_dir)
     _validate_path_setting("AUDIO_EXTRACT_DIR", config.audio_extract_dir)

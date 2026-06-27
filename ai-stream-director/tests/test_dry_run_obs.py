@@ -106,6 +106,10 @@ class DryRunOBSConfigTests(unittest.TestCase):
                 {"TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS": "0"},
                 "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS must be positive",
             ),
+            (
+                {"LIVE_TRANSCRIPTION_QUEUE_SIZE": "0"},
+                "LIVE_TRANSCRIPTION_QUEUE_SIZE must be positive",
+            ),
         )
 
         for env, message in cases:
@@ -215,6 +219,8 @@ class DryRunOBSConfigTests(unittest.TestCase):
 
         self.assertEqual(config.ingest_api_url, "rtmp://localhost/live")
         self.assertEqual(config.transcription_api_url, "http://faster-whisper:8000")
+        self.assertFalse(config.live_transcription_enabled)
+        self.assertEqual(config.live_transcription_queue_size, 16)
         self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
         self.assertEqual(config.lookback_window_seconds, 30)
         self.assertEqual(config.switch_lookback_seconds, 15)
@@ -244,6 +250,20 @@ class DryRunOBSConfigTests(unittest.TestCase):
             config.lookback_input_urls["player_3"],
             "srt://player-three:9000",
         )
+
+    def test_live_transcription_runtime_settings_are_configurable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "LIVE_TRANSCRIPTION_ENABLED": "true",
+                "LIVE_TRANSCRIPTION_QUEUE_SIZE": "3",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertTrue(config.live_transcription_enabled)
+        self.assertEqual(config.live_transcription_queue_size, 3)
 
 
 class DryRunOBSControllerTests(unittest.TestCase):

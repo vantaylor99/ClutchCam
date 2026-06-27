@@ -10,13 +10,13 @@ It does four things:
    endpoint.
 4. Switches OBS scenes when the AI finds a clear focus moment.
 
-It does not wire real transcription, video capture, stream delay, OBS scene
-creation, or OBS media-source mutation into the terminal MVP loop yet. Local SRS
-ingest, rolling FFmpeg lookback buffering, audio extraction, Faster-Whisper HTTP
-transcription, runtime workers, and buffer-backed switch resolution now exist
-behind service boundaries and Compose profiles. The terminal MVP still consumes
-typed transcript lines and applies immediate scene changes unless future runtime
-wiring supplies real transcript events and buffered playback targets.
+It does not create OBS scenes or enable OBS media-source mutation by default.
+Local SRS ingest, rolling FFmpeg lookback buffering, audio extraction,
+Faster-Whisper HTTP transcription, runtime workers, and buffer-backed switch
+resolution now exist behind service boundaries and Compose profiles. The
+default prompt still accepts typed transcript lines, while
+`LIVE_TRANSCRIPTION_ENABLED=true` lets the orchestrator consume final live
+`TranscriptEvent` values from the in-process transcription source.
 
 ## Production Direction
 
@@ -337,10 +337,14 @@ continuously writing short media segments to SSD.
 
 `src/services/transcription.py` includes the first audio extraction boundary and
 FFmpeg command builder. It uses the same stable stream IDs as the ingest and
-buffer services, and it can normalize stream audio into chunk references for a
-future Faster-Whisper adapter.
+buffer services, and it normalizes stream audio into chunk references for the
+Faster-Whisper adapter. In the integrated local Linux path, the orchestrator
+owns live audio extraction when `LIVE_TRANSCRIPTION_ENABLED=true`; the
+standalone `transcription-worker` service uses the same settings only when run
+explicitly for JSONL diagnostics.
 
 ```text
+FFMPEG_EXECUTABLE=ffmpeg
 AUDIO_EXTRACT_DIR=/dev/shm/clutchcam-audio
 AUDIO_EXTRACT_SAMPLE_RATE=16000
 AUDIO_EXTRACT_CHANNELS=1
@@ -355,7 +359,8 @@ AUDIO_INPUT_URL_PLAYER_4=rtmp://media-server:1935/live/player_4
 
 If a per-player audio input URL is not set, it falls back to
 `LOOKBACK_INPUT_URL_<PLAYER>` and then `<INGEST_API_URL>/<stream_id>`. The
-extractor is not started by the terminal MVP yet.
+orchestrator and diagnostic worker should not be run as simultaneous
+transcription owners for the same live inputs.
 
 ## Transcription API Adapter
 
@@ -393,11 +398,28 @@ TRANSCRIPTION_MODEL=Systran/faster-whisper-small
 TRANSCRIPTION_LANGUAGE=
 TRANSCRIPTION_RESPONSE_FORMAT=json
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
+LIVE_TRANSCRIPTION_ENABLED=false
+LIVE_TRANSCRIPTION_QUEUE_SIZE=16
 ```
 
 The adapter is unit-tested with mocked HTTP responses and does not require a
-live Faster-Whisper container for local validation. It is not wired into
-`src/main.py` yet.
+live Faster-Whisper container for local validation. `src/main.py` starts the
+in-process live source only when `LIVE_TRANSCRIPTION_ENABLED=true`; otherwise
+the terminal prompt remains the transcript source.
+
+## Standalone Transcription Worker Diagnostics
+
+The `transcription-worker` Compose service is an explicit diagnostic and
+healthcheck target. It emits JSONL transcript and failure records from the same
+FFmpeg and transcription adapter boundaries, but it is not part of the default
+integrated local Linux profile set. Run it only when you want to inspect that
+path separately:
+
+```bash
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
+COMPOSE_PROFILES=media-server,transcription-worker \
+docker compose up -d --build transcription-worker
+```
 
 ## Optional Local Faster-Whisper Profile
 
@@ -583,10 +605,22 @@ the JSON `stdout` field includes `DRY_RUN_OBS enabled`,
 `Exiting.` Set `SMOKE_ORCHESTRATOR_FAKE_AI=false` to use your real
 `GEMMA_API_URL` instead.
 
+When a transcription endpoint is reachable, the first integrated live check can
+still avoid real OBS. Keep `transcription-worker` out of `COMPOSE_PROFILES` so
+the orchestrator is the only audio extraction owner:
+
+```bash
+DRY_RUN_OBS=true \
+LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
+COMPOSE_PROFILES=local-linux \
+docker compose run --rm orchestrator
+```
+
 Shut the local stack down when the smoke pass is complete:
 
 ```bash
-COMPOSE_PROFILES=media-server,buffer-worker \
+COMPOSE_PROFILES=local-linux \
 docker compose down
 ```
 

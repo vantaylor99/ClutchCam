@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from ai_director import AIDirector, AIDirectorError, DirectorDecision
-from config import SCENES, get_config
+from config import SCENES, AppConfig, get_config
 from contracts import HypeSignal, SwitcherTarget, TranscriptEvent
 from obs_controller import DryRunOBSController, OBSController
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
@@ -24,6 +24,7 @@ from services.switcher import (
     buffered_target_from_signal,
 )
 from transcript_router import TranscriptMessage, TranscriptRouter
+from transcription_worker import TranscriptionWorker, build_worker
 
 
 HELP_TEXT = """
@@ -96,6 +97,115 @@ class RuntimeTranscriptEventHandler:
         if not result.accepted:
             return None
         return result
+
+
+class LiveTranscriptQueueSink:
+    """Queues final transcript events for the orchestrator thread."""
+
+    def __init__(
+        self,
+        event_queue: queue.Queue[TranscriptEvent],
+        *,
+        log=print,
+    ) -> None:
+        self.event_queue = event_queue
+        self.log = log
+
+    def __call__(self, event: TranscriptEvent) -> TranscriptEvent | None:
+        if not event.is_final:
+            self.log(
+                "Ignoring partial live transcript event from "
+                f"{event.stream_id}."
+            )
+            return None
+
+        try:
+            self.event_queue.put_nowait(event)
+        except queue.Full:
+            self.log(
+                "Live transcription queue full; dropping newest final "
+                f"transcript event from {event.stream_id}."
+            )
+            return None
+
+        return event
+
+
+class LiveTranscriptionSource:
+    """Runs the transcription worker in-process and exposes queued events."""
+
+    def __init__(
+        self,
+        *,
+        worker: TranscriptionWorker,
+        event_queue: queue.Queue[TranscriptEvent],
+        log=print,
+        thread_factory=threading.Thread,
+        started_event: threading.Event | None = None,
+        startup_timeout_seconds: float = 5.0,
+    ) -> None:
+        self.worker = worker
+        self.event_queue = event_queue
+        self.log = log
+        self.thread_factory = thread_factory
+        self.started_event = started_event or threading.Event()
+        self.startup_timeout_seconds = float(startup_timeout_seconds)
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._stop_requested = False
+        self._startup_error: Exception | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None or self._stop_requested:
+                return
+
+            self.started_event.clear()
+            self._startup_error = None
+            self._thread = self.thread_factory(
+                target=self._run,
+                name="live-transcription-source",
+                daemon=True,
+            )
+            thread = self._thread
+
+        thread.start()
+        if not self.started_event.wait(self.startup_timeout_seconds):
+            self.stop()
+            raise RuntimeError(
+                "Live transcription source did not start within "
+                f"{self.startup_timeout_seconds:.1f}s."
+            )
+        if self._startup_error is not None:
+            self.stop()
+            raise RuntimeError(
+                "Live transcription source failed to start."
+            ) from self._startup_error
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._stop_requested:
+                return
+
+            self._stop_requested = True
+            self.worker.stop_event.set()
+            thread = self._thread
+
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+
+    def get_nowait(self) -> TranscriptEvent:
+        return self.event_queue.get_nowait()
+
+    def _run(self) -> None:
+        try:
+            self.worker.run_forever()
+        except Exception as exc:
+            self._startup_error = exc
+            self.started_event.set()
+            self.log(f"Live transcription source stopped with error: {exc}")
+        finally:
+            self.started_event.set()
 
 
 class TerminalOutput:
@@ -204,6 +314,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Check OBS WebSocket settings and your .env values.")
         return 1
 
+    live_transcription_source: LiveTranscriptionSource | None = None
+    if config.live_transcription_enabled:
+        try:
+            live_transcription_source = build_live_transcription_source(
+                config,
+                log=terminal_output.log,
+            )
+            live_transcription_source.start()
+        except Exception as exc:
+            if live_transcription_source is not None:
+                live_transcription_source.stop()
+            print(f"Could not start live transcription source: {exc}")
+            return 1
+
     input_queue: queue.Queue[str | None] = queue.Queue()
     input_thread = threading.Thread(
         target=read_terminal_input,
@@ -213,14 +337,97 @@ def main(argv: Sequence[str] | None = None) -> int:
     input_thread.start()
     terminal_output.enable_prompt_refresh()
 
+    return run_orchestrator_loop(
+        input_queue=input_queue,
+        transcript_router=transcript_router,
+        ai_director=ai_director,
+        scheduler=scheduler,
+        trigger_prefilter=trigger_prefilter,
+        live_transcription_source=live_transcription_source,
+        switch_lookback_seconds=config.switch_lookback_seconds,
+        log=terminal_output.log,
+    )
+
+
+def find_missing_scenes(
+    available_scenes: Iterable[str],
+    required_scenes: Iterable[str],
+) -> list[str]:
+    available = set(available_scenes)
+    return [scene_name for scene_name in required_scenes if scene_name not in available]
+
+
+def build_live_transcription_source(
+    config: AppConfig,
+    *,
+    log=print,
+) -> LiveTranscriptionSource:
+    event_queue: queue.Queue[TranscriptEvent] = queue.Queue(
+        maxsize=config.live_transcription_queue_size,
+    )
+    queue_sink = LiveTranscriptQueueSink(event_queue, log=log)
+
+    def failure_sink(failure) -> None:
+        log(
+            "Live transcription chunk failed for "
+            f"{failure.audio_ref.stream_id}: {failure.message}"
+        )
+
+    started_event = threading.Event()
+    worker = build_worker(
+        app_config=config,
+        sink=queue_sink,
+        failure_sink=failure_sink,
+        started_event=started_event,
+    )
+    return LiveTranscriptionSource(
+        worker=worker,
+        event_queue=event_queue,
+        log=log,
+        started_event=started_event,
+    )
+
+
+def run_orchestrator_loop(
+    *,
+    input_queue: queue.Queue[str | None],
+    transcript_router: TranscriptRouter,
+    ai_director: AIDirector,
+    scheduler: SceneScheduler,
+    trigger_prefilter: TranscriptTriggerPrefilter | None = None,
+    live_transcription_source: LiveTranscriptionSource | None = None,
+    output_switcher: OutputSwitcher | None = None,
+    switch_lookback_seconds: int = 15,
+    tick_interval_seconds: float = TICK_INTERVAL_SECONDS,
+    log=print,
+) -> int:
+    event_handler = RuntimeTranscriptEventHandler(
+        transcript_router=transcript_router,
+        ai_director=ai_director,
+        scheduler=scheduler,
+        trigger_prefilter=trigger_prefilter,
+        output_switcher=output_switcher,
+        switch_lookback_seconds=switch_lookback_seconds,
+        log=log,
+    )
+
     try:
         while True:
             scheduler.tick()
+            drain_live_transcription_events(
+                live_transcription_source,
+                event_handler,
+            )
 
             try:
-                line = input_queue.get(timeout=TICK_INTERVAL_SECONDS)
+                line = input_queue.get(timeout=tick_interval_seconds)
             except queue.Empty:
                 continue
+
+            drain_live_transcription_events(
+                live_transcription_source,
+                event_handler,
+            )
 
             if line is INPUT_CLOSED:
                 print()
@@ -233,23 +440,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ai_director,
                 scheduler,
                 trigger_prefilter=trigger_prefilter,
-                log=terminal_output.log,
+                log=log,
             ):
                 return 0
     except KeyboardInterrupt:
         print()
         print("Exiting.")
         return 0
+    finally:
+        if live_transcription_source is not None:
+            live_transcription_source.stop()
 
-    return 0
 
+def drain_live_transcription_events(
+    live_transcription_source: LiveTranscriptionSource | None,
+    event_handler: RuntimeTranscriptEventHandler,
+) -> int:
+    if live_transcription_source is None:
+        return 0
 
-def find_missing_scenes(
-    available_scenes: Iterable[str],
-    required_scenes: Iterable[str],
-) -> list[str]:
-    available = set(available_scenes)
-    return [scene_name for scene_name in required_scenes if scene_name not in available]
+    drained = 0
+    while True:
+        try:
+            event = live_transcription_source.get_nowait()
+        except queue.Empty:
+            return drained
+
+        event_handler(event)
+        drained += 1
 
 
 def read_terminal_input(input_queue: queue.Queue[str | None]) -> None:
@@ -303,6 +521,13 @@ def process_transcript_event(
     switch_lookback_seconds: int = 15,
     log=print,
 ) -> RuntimeTranscriptEventResult:
+    if not event.is_final:
+        log(f"Ignoring partial transcript event from {event.stream_id}.")
+        return RuntimeTranscriptEventResult(
+            accepted=False,
+            reason="partial_event",
+        )
+
     message = transcript_router.add_event(event)
     if message is None:
         log(f"Transcript event rejected from {event.stream_id}.")

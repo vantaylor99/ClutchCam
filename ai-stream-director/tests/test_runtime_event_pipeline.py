@@ -1,7 +1,10 @@
 import io
+import queue
+import threading
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import ANY, Mock
 
@@ -15,9 +18,13 @@ from ai_director import DirectorDecision  # noqa: E402
 from config import SCENES  # noqa: E402
 from contracts import HypeSignal, TranscriptEvent  # noqa: E402
 from main import (  # noqa: E402
+    INPUT_CLOSED,
+    LiveTranscriptQueueSink,
+    LiveTranscriptionSource,
     RuntimeTranscriptEventHandler,
     build_runtime_switch_target,
     process_transcript_event,
+    run_orchestrator_loop,
 )
 from obs_controller import DryRunOBSController  # noqa: E402
 from scheduler import SceneScheduler  # noqa: E402
@@ -118,6 +125,215 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertEqual(router.get_recent_context_text(), "player_4: holy cow, rare boss")
         self.assertIn("switch cooldown has", output.getvalue())
 
+    def test_live_queue_sink_routes_final_event_on_orchestrator_thread(self) -> None:
+        event_queue: queue.Queue[TranscriptEvent] = queue.Queue(maxsize=2)
+        sink_output = io.StringIO()
+        sink = LiveTranscriptQueueSink(
+            event_queue,
+            log=lambda message: print(message, file=sink_output),
+        )
+        event = TranscriptEvent(
+            stream_id="player_2",
+            text="no way, found diamonds",
+            start_time_seconds=30.0,
+            end_time_seconds=31.0,
+        )
+
+        accepted = sink(event)
+
+        self.assertIs(accepted, event)
+        queued_event = event_queue.get_nowait()
+        scheduler = _started_scheduler()
+        scheduler.set_ai_enabled(False)
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        result = RuntimeTranscriptEventHandler(
+            transcript_router=router,
+            ai_director=ai_director,
+            scheduler=scheduler,
+            log=lambda message: None,
+        )(queued_event)
+
+        ai_director.decide.assert_not_called()
+        self.assertIsNotNone(result)
+        self.assertTrue(result.accepted)
+        self.assertEqual(
+            router.get_recent_context_text(),
+            "player_2: no way, found diamonds",
+        )
+        self.assertEqual(sink_output.getvalue(), "")
+
+    def test_live_queue_sink_ignores_partial_events(self) -> None:
+        event_queue: queue.Queue[TranscriptEvent] = queue.Queue(maxsize=2)
+        output = io.StringIO()
+        sink = LiveTranscriptQueueSink(
+            event_queue,
+            log=lambda message: print(message, file=output),
+        )
+
+        accepted = sink(
+            TranscriptEvent(
+                stream_id="player_3",
+                text="still thinking",
+                start_time_seconds=40.0,
+                end_time_seconds=41.0,
+                is_final=False,
+            )
+        )
+
+        self.assertIsNone(accepted)
+        self.assertTrue(event_queue.empty())
+        self.assertIn("Ignoring partial live transcript event", output.getvalue())
+
+    def test_live_queue_sink_drops_newest_event_when_queue_is_full(self) -> None:
+        event_queue: queue.Queue[TranscriptEvent] = queue.Queue(maxsize=1)
+        first_event = TranscriptEvent("player_1", "first", 1.0, 2.0)
+        event_queue.put_nowait(first_event)
+        output = io.StringIO()
+        sink = LiveTranscriptQueueSink(
+            event_queue,
+            log=lambda message: print(message, file=output),
+        )
+
+        accepted = sink(TranscriptEvent("player_4", "newest", 3.0, 4.0))
+
+        self.assertIsNone(accepted)
+        self.assertIs(event_queue.get_nowait(), first_event)
+        self.assertIn("queue full; dropping newest", output.getvalue())
+
+    def test_partial_runtime_event_is_not_added_to_history(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        output = io.StringIO()
+
+        result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_1",
+                text="partial phrase",
+                start_time_seconds=50.0,
+                end_time_seconds=51.0,
+                is_final=False,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: print(message, file=output),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "partial_event")
+        self.assertEqual(router.get_recent_messages(), [])
+        ai_director.decide.assert_not_called()
+        self.assertIn("Ignoring partial transcript event", output.getvalue())
+
+    def test_orchestrator_loop_drains_live_events_and_stops_source_on_eof(self) -> None:
+        scheduler = _started_scheduler()
+        scheduler.set_ai_enabled(False)
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        input_queue: queue.Queue[str | None] = queue.Queue()
+        input_queue.put(INPUT_CLOSED)
+        source = FakeLiveTranscriptionSource(
+            [
+                TranscriptEvent(
+                    stream_id="player_4",
+                    text="holy cow, look",
+                    start_time_seconds=60.0,
+                    end_time_seconds=61.0,
+                )
+            ]
+        )
+
+        with redirect_stdout(io.StringIO()):
+            exit_code = run_orchestrator_loop(
+                input_queue=input_queue,
+                transcript_router=router,
+                ai_director=ai_director,
+                scheduler=scheduler,
+                live_transcription_source=source,
+                tick_interval_seconds=0.001,
+                log=lambda message: None,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(source.stop_calls, 1)
+        ai_director.decide.assert_not_called()
+        self.assertEqual(router.get_recent_context_text(), "player_4: holy cow, look")
+
+    def test_orchestrator_loop_stops_live_source_on_quit_command(self) -> None:
+        input_queue: queue.Queue[str | None] = queue.Queue()
+        input_queue.put("/quit")
+        source = FakeLiveTranscriptionSource()
+
+        with redirect_stdout(io.StringIO()):
+            exit_code = run_orchestrator_loop(
+                input_queue=input_queue,
+                transcript_router=TranscriptRouter(),
+                ai_director=Mock(),
+                scheduler=FakeLoopScheduler(),
+                live_transcription_source=source,
+                tick_interval_seconds=0.001,
+                log=lambda message: None,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(source.stop_calls, 1)
+
+    def test_orchestrator_loop_stops_live_source_on_keyboard_interrupt(self) -> None:
+        source = FakeLiveTranscriptionSource()
+
+        with redirect_stdout(io.StringIO()):
+            exit_code = run_orchestrator_loop(
+                input_queue=queue.Queue(),
+                transcript_router=TranscriptRouter(),
+                ai_director=Mock(),
+                scheduler=FakeLoopScheduler(raise_keyboard_interrupt=True),
+                live_transcription_source=source,
+                tick_interval_seconds=0.001,
+                log=lambda message: None,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(source.stop_calls, 1)
+
+    def test_live_transcription_source_surfaces_startup_failure(self) -> None:
+        output = io.StringIO()
+        worker = FakeLiveWorker(RuntimeError("input unavailable"))
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            startup_timeout_seconds=0.1,
+            log=lambda message: print(message, file=output),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Live transcription source failed to start",
+        ):
+            source.start()
+
+        self.assertTrue(worker.stop_event.is_set())
+        self.assertEqual(worker.run_calls, 1)
+        self.assertIn("input unavailable", output.getvalue())
+
+    def test_live_transcription_source_waits_until_worker_has_started(self) -> None:
+        started_event = threading.Event()
+        worker = FakeLiveWorker(started_event=started_event)
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            started_event=started_event,
+            startup_timeout_seconds=0.5,
+            log=lambda message: None,
+        )
+
+        source.start()
+        source.stop()
+
+        self.assertEqual(worker.run_calls, 1)
+        self.assertTrue(worker.stop_event.is_set())
+
     def test_accepted_ai_decision_resolves_buffered_switch_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_switcher = BufferBackedSwitcher(
@@ -196,6 +412,52 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         )
 
         self.assertIsNone(target)
+
+
+class FakeLiveTranscriptionSource:
+    def __init__(self, events: list[TranscriptEvent] | None = None) -> None:
+        self.events: queue.Queue[TranscriptEvent] = queue.Queue()
+        for event in events or []:
+            self.events.put_nowait(event)
+        self.stop_calls = 0
+
+    def get_nowait(self) -> TranscriptEvent:
+        return self.events.get_nowait()
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+
+class FakeLiveWorker:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        started_event: threading.Event | None = None,
+    ) -> None:
+        self.error = error
+        self.started_event = started_event
+        self.stop_event = threading.Event()
+        self.run_calls = 0
+
+    def run_forever(self) -> None:
+        self.run_calls += 1
+        if self.error is not None:
+            raise self.error
+        if self.started_event is not None:
+            self.started_event.set()
+        self.stop_event.wait(1.0)
+
+
+class FakeLoopScheduler:
+    def __init__(self, *, raise_keyboard_interrupt: bool = False) -> None:
+        self.raise_keyboard_interrupt = raise_keyboard_interrupt
+        self.tick_calls = 0
+
+    def tick(self) -> None:
+        self.tick_calls += 1
+        if self.raise_keyboard_interrupt:
+            raise KeyboardInterrupt
 
 
 def _started_scheduler(min_switch_interval_seconds: int = 0) -> SceneScheduler:

@@ -51,9 +51,7 @@ class LinuxComposeStackTests(unittest.TestCase):
         expected_services = {
             "media-server": 'profiles: ["media-server", "local-linux"]',
             "buffer-worker": 'profiles: ["buffer-worker", "local-linux"]',
-            "transcription-worker": (
-                'profiles: ["transcription-worker", "local-linux"]'
-            ),
+            "transcription-worker": 'profiles: ["transcription-worker"]',
             "orchestrator": 'profiles: ["orchestrator", "local-linux"]',
         }
 
@@ -72,6 +70,10 @@ class LinuxComposeStackTests(unittest.TestCase):
         self.assertIn(
             'command: ["python", "src/main.py"]',
             service_block("orchestrator"),
+        )
+        self.assertNotIn(
+            'profiles: ["transcription-worker", "local-linux"]',
+            service_block("transcription-worker"),
         )
 
     def test_runtime_services_define_bounded_healthchecks(self) -> None:
@@ -117,11 +119,43 @@ class LinuxComposeStackTests(unittest.TestCase):
             transcription_worker,
         )
         self.assertIn(
+            "TRANSCRIPTION_REQUEST_MODE: ${TRANSCRIPTION_REQUEST_MODE:-json}",
+            transcription_worker,
+        )
+        self.assertIn(
+            "TRANSCRIPTION_MODEL: "
+            "${TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}",
+            transcription_worker,
+        )
+        self.assertIn(
+            "AUDIO_INPUT_URL_PLAYER_1: "
+            "${AUDIO_INPUT_URL_PLAYER_1:-rtmp://media-server:1935/live/player_1}",
+            transcription_worker,
+        )
+        self.assertIn(
             "GEMMA_API_URL: ${GEMMA_API_URL:-http://ollama:11434}",
             orchestrator,
         )
         self.assertIn("AI_PROVIDER: ${AI_PROVIDER:-ollama}", orchestrator)
         self.assertIn("GEMMA_API_KEY: ${GEMMA_API_KEY:-}", orchestrator)
+        self.assertIn(
+            "TRANSCRIPTION_API_URL: "
+            "${TRANSCRIPTION_API_URL:-http://host.docker.internal:8000}",
+            orchestrator,
+        )
+        self.assertIn(
+            "LIVE_TRANSCRIPTION_ENABLED: ${LIVE_TRANSCRIPTION_ENABLED:-false}",
+            orchestrator,
+        )
+        self.assertIn(
+            "LIVE_TRANSCRIPTION_QUEUE_SIZE: ${LIVE_TRANSCRIPTION_QUEUE_SIZE:-16}",
+            orchestrator,
+        )
+        self.assertIn(
+            "AUDIO_INPUT_URL_PLAYER_1: "
+            "${AUDIO_INPUT_URL_PLAYER_1:-rtmp://media-server:1935/live/player_1}",
+            orchestrator,
+        )
         self.assertNotIn("depends_on:", orchestrator)
         self.assertNotIn("ollama-pull", orchestrator)
 
@@ -209,12 +243,9 @@ class LinuxComposeStackTests(unittest.TestCase):
             line for line in env_example.splitlines() if line.startswith("COMPOSE_PROFILES=")
         )
 
-        self.assertIn(
-            "COMPOSE_PROFILES=media-server,buffer-worker,"
-            "transcription-worker,orchestrator,local-ai",
-            env_example,
-        )
+        self.assertIn("COMPOSE_PROFILES=local-linux,local-ai", env_example)
         self.assertNotIn("local-transcription", profiles_line)
+        self.assertNotIn("transcription-worker", profiles_line)
         self.assertIn("LOOKBACK_BUFFER_HOST_DIR=/dev/shm/clutchcam", env_example)
         self.assertIn("AUDIO_EXTRACT_HOST_DIR=/dev/shm/clutchcam-audio", env_example)
         self.assertIn("GEMMA_API_URL=http://ollama:11434", env_example)
@@ -226,6 +257,8 @@ class LinuxComposeStackTests(unittest.TestCase):
             "TRANSCRIPTION_API_URL=http://host.docker.internal:8000",
             env_example,
         )
+        self.assertIn("LIVE_TRANSCRIPTION_ENABLED=false", env_example)
+        self.assertIn("LIVE_TRANSCRIPTION_QUEUE_SIZE=16", env_example)
         self.assertIn(
             "# TRANSCRIPTION_API_URL=http://faster-whisper:8000",
             env_example,
