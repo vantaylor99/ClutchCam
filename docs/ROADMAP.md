@@ -176,9 +176,7 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets:
-
-- `tickets/review/43.5-buffer-reconnect-telemetry-proof.md`
+Active review tickets: none.
 
 Active implement tickets:
 
@@ -239,6 +237,7 @@ Completed review tickets:
 - `tickets/complete/41-buffer-worker-ffmpeg-supervision.md`
 - `tickets/complete/42-generated-ingest-preflight-diagnostics.md`
 - `tickets/complete/43-linux-generated-ingest-acceptance.md`
+- `tickets/complete/43.5-buffer-reconnect-telemetry-proof.md`
 - `tickets/complete/44-transcription-ffmpeg-supervision.md`
 
 Backlog tickets:

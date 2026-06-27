@@ -55,6 +55,8 @@ The MVP supports:
   scheduler gates, and buffered switch target construction.
 - An OBS media-source switcher adapter that can update a known OBS Media Source
   with a resolved buffered clip URI before cutting to the target scene.
+- FFmpeg audio extraction supervision for late or reconnecting live inputs,
+  using bounded restart backoff and per-stream isolation.
 - Operator runbooks under `docs/runbooks/` for terminal dry-run setup, local
   Linux Compose setup, smoke checks, OBS scene preparation, stream publishing,
   recovery from common local event failures, and Linux/cloud deployment
@@ -133,9 +135,9 @@ The repo does not yet include:
   Faster-Whisper transcription and OBS playback. Live generated-ingest
   validation against SRS, FFmpeg, the rolling buffer, Ollama, and the dry-run
   orchestrator has passed on `clutchcam-media-1`; evidence is recorded in
-  `tickets/complete/43-linux-generated-ingest-acceptance.md`. Reconnect data
-  plane behavior looked healthy, but deterministic reconnect telemetry remains
-  tracked in `tickets/fix/43.5-buffer-reconnect-telemetry-proof.md`.
+  `tickets/complete/43-linux-generated-ingest-acceptance.md`. Deterministic
+  reconnect proof also passed on `clutchcam-media-1`; evidence is recorded in
+  `tickets/complete/43.5-buffer-reconnect-telemetry-proof.md`.
 - PyVMIX media-source playback that consumes a resolved buffered clip URI.
 - End-to-end tests using sample media fixtures.
 - Live latency/soak runs against real LAN or cloud endpoints. The offline
@@ -200,11 +202,14 @@ the Compose plugin, host FFmpeg, SRS, and the rolling buffer:
 python scripts\compose_generated_ingest_checkpoint.py
 python scripts\compose_generated_ingest_checkpoint.py --run
 python scripts\compose_generated_ingest_checkpoint.py --run --streams player_1,player_2,player_3,player_4
+python scripts\compose_generated_ingest_checkpoint.py --run --streams player_1 --reconnect-proof
 ```
 
 When multiple streams are requested, the checkpoint now requires every
 requested stream to resolve a clip; a single ready stream no longer satisfies a
-multi-stream run.
+multi-stream run. The optional reconnect proof runs a second bounded publish
+and requires stable `buffer-worker` identity plus latest segment sequence
+advancement.
 
 Final terminal-MVP dry-run review passed for calm transcript input, a focused
 player moment, cooldown rejection, manual overrides, `/ai off`, `/ai on`,
