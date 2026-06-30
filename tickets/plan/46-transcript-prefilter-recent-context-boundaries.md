@@ -1,13 +1,13 @@
-description: Evaluate transcript triggers across recent same-stream context
+description: Make transcript detection consider recent fragments from the same stream so split phrases are not missed.
 prereq: prefilter-live-eval-gaming-callouts
 files: ai-stream-director/src/services/ai.py, ai-stream-director/src/transcript_router.py, ai-stream-director/src/main.py, ai-stream-director/tests/test_runtime_event_pipeline.py, ai-stream-director/tests/test_service_boundaries.py
 ----
-The current `TranscriptTriggerPrefilter` decides whether to escalate by looking
-only at the newest `TranscriptEvent.text`. That is fragile when Faster-Whisper
-or fixed audio chunks split a natural phrase across adjacent events, such as
-`holy` in one event and `cow` in the next. In that case the AI director never
-sees the broader transcript context because the local prefilter rejects the
-newest event first.
+The current transcript prefilter decides whether to escalate a transcript event
+by looking only at the newest transcript text. That is fragile when speech
+recognition or fixed audio chunks split a natural phrase across adjacent events,
+such as `holy` in one event and `cow` in the next. In that case the AI director
+never sees the broader transcript context because the local prefilter rejects
+the newest event first.
 
 The desired behavior is for the local prefilter to evaluate a bounded recent
 same-stream context ending at the newest event, while preserving the existing
