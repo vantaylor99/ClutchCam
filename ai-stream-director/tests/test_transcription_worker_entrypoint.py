@@ -14,6 +14,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from contracts import TranscriptEvent  # noqa: E402
+from config import TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE, get_config  # noqa: E402
 from services.transcription import (  # noqa: E402
     AudioExtractionConfig,
     AudioInputRef,
@@ -26,6 +27,7 @@ from transcription_worker import (  # noqa: E402
     OverlappedAudioWindowDiscovery,
     SignalStopController,
     TranscriptionWorker,
+    build_transcription_event_source,
     build_worker,
 )
 
@@ -151,6 +153,46 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
 
         self.assertIsInstance(worker.discovery, OverlappedAudioWindowDiscovery)
         self.assertEqual(worker.discovery.overlap_seconds, 1.0)
+
+    def test_build_source_rejects_reserved_unimplemented_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "TRANSCRIPTION_SOURCE_MODE": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+                },
+                clear=True,
+            ):
+                config = get_config()
+
+        with self.assertRaisesRegex(
+            TranscriptionError,
+            "Unsupported TRANSCRIPTION_SOURCE_MODE.*vad-utterance",
+        ):
+            build_transcription_event_source(app_config=config)
+
+    def test_chunked_source_start_and_stop_wrap_worker_lifecycle(self) -> None:
+        stop_event = threading.Event()
+        extractor = FakeExtractor()
+        source = TranscriptionWorker(
+            extraction_config=AudioExtractionConfig(
+                output_dir="audio-cache",
+                stream_input_urls={"player_1": "x"},
+                stream_ids=("player_1",),
+            ),
+            extractor=extractor,
+            transcriber=FakeTranscriber([]),
+            sink=lambda event: event,
+            discovery=FakeDiscovery(),
+            stop_event=stop_event,
+            wait=lambda seconds: stop_event.is_set(),
+        )
+        source.stop()
+        source.start()
+
+        self.assertEqual(extractor.starts, 1)
+        self.assertEqual(extractor.stops, 1)
 
     def test_completed_chunk_discovery_deduplicates_processed_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

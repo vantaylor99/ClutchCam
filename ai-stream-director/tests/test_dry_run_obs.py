@@ -18,6 +18,8 @@ from config import (  # noqa: E402
     AI_PROVIDER_OPENAI_COMPATIBLE,
     SECRET_REDACTION,
     SCENES,
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
     get_config,
     redact_secrets,
 )
@@ -109,6 +111,10 @@ class DryRunOBSConfigTests(unittest.TestCase):
             (
                 {"LIVE_TRANSCRIPTION_QUEUE_SIZE": "0"},
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE must be positive",
+            ),
+            (
+                {"TRANSCRIPTION_SOURCE_MODE": "mystery"},
+                "Unsupported TRANSCRIPTION_SOURCE_MODE",
             ),
             (
                 {"TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "0"},
@@ -301,6 +307,7 @@ class DryRunOBSConfigTests(unittest.TestCase):
             {
                 "LIVE_TRANSCRIPTION_ENABLED": "true",
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE": "3",
+                "TRANSCRIPTION_SOURCE_MODE": "vad_utterance",
                 "TRANSCRIPT_LOG_TEXT_ENABLED": "true",
                 "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "42",
             },
@@ -310,8 +317,34 @@ class DryRunOBSConfigTests(unittest.TestCase):
 
         self.assertTrue(config.live_transcription_enabled)
         self.assertEqual(config.live_transcription_queue_size, 3)
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+        )
         self.assertTrue(config.transcript_log_text_enabled)
         self.assertEqual(config.transcript_log_text_max_characters, 42)
+
+    def test_transcription_source_mode_defaults_to_chunked(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_config()
+
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+        )
+
+    def test_transcription_source_mode_accepts_chunked_alias(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIPTION_SOURCE_MODE": "fixed_chunks"},
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+        )
 
 
 class DryRunOBSControllerTests(unittest.TestCase):

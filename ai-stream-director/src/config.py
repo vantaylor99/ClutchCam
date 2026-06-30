@@ -29,6 +29,12 @@ SUPPORTED_TRANSCRIPTION_REQUEST_MODES = (
     TRANSCRIPTION_REQUEST_MODE_JSON,
     TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
 )
+TRANSCRIPTION_SOURCE_MODE_CHUNKED = "chunked"
+TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE = "vad-utterance"
+SUPPORTED_TRANSCRIPTION_SOURCE_MODES = (
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+)
 
 SECRET_REDACTION = "[REDACTED]"
 _SECRET_NAME_PARTS = ("key", "token", "password", "secret")
@@ -55,6 +61,16 @@ _TRANSCRIPTION_REQUEST_MODE_ALIASES = {
     "multipart": TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
 }
 
+_TRANSCRIPTION_SOURCE_MODE_ALIASES = {
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED: TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "chunks": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "fixed-chunk": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "fixed-chunks": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE: TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+    "vad": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+    "utterance": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+}
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -66,6 +82,7 @@ class AppConfig:
     ingest_api_url: str
     transcription_api_url: str
     transcription_request_mode: str
+    transcription_source_mode: str
     transcription_endpoint_path: str
     transcription_model: str
     transcription_language: str
@@ -136,6 +153,12 @@ def get_config() -> AppConfig:
             os.getenv(
                 "TRANSCRIPTION_REQUEST_MODE",
                 TRANSCRIPTION_REQUEST_MODE_JSON,
+            )
+        ),
+        transcription_source_mode=normalize_transcription_source_mode(
+            os.getenv(
+                "TRANSCRIPTION_SOURCE_MODE",
+                TRANSCRIPTION_SOURCE_MODE_CHUNKED,
             )
         ),
         transcription_endpoint_path=os.getenv("TRANSCRIPTION_ENDPOINT_PATH", ""),
@@ -281,6 +304,19 @@ def normalize_transcription_request_mode(value: str) -> str:
     supported = ", ".join(SUPPORTED_TRANSCRIPTION_REQUEST_MODES)
     raise ValueError(
         "Unsupported TRANSCRIPTION_REQUEST_MODE "
+        f"{value!r}. Expected one of: {supported}."
+    )
+
+
+def normalize_transcription_source_mode(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    source_mode = _TRANSCRIPTION_SOURCE_MODE_ALIASES.get(normalized)
+    if source_mode is not None:
+        return source_mode
+
+    supported = ", ".join(SUPPORTED_TRANSCRIPTION_SOURCE_MODES)
+    raise ValueError(
+        "Unsupported TRANSCRIPTION_SOURCE_MODE "
         f"{value!r}. Expected one of: {supported}."
     )
 

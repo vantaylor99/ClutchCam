@@ -13,7 +13,11 @@ from typing import Callable, TextIO
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
-from config import AppConfig, get_config
+from config import (
+    AppConfig,
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    get_config,
+)
 from contracts import TranscriptEvent
 from services.transcription import (
     AudioExtractionConfig,
@@ -22,10 +26,12 @@ from services.transcription import (
     FFmpegAudioExtractor,
     FasterWhisperTranscriber,
     Transcriber,
+    TranscriptionError,
     build_overlapped_audio_ref,
 )
 from services.health import run_runtime_healthcheck
 from services.transcription_runtime import (
+    TranscriptEventSource,
     TranscriptEventSink,
     TranscriptionRuntimeFailure,
     TranscriptionRuntimePump,
@@ -255,6 +261,12 @@ class TranscriptionWorker:
             self.failure_sink(failure)
         return summary
 
+    def start(self) -> None:
+        self.run_forever()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
     def run_forever(self) -> None:
         try:
             self.extractor.start()
@@ -319,7 +331,43 @@ def build_worker(
     poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     fail_fast: bool = False,
 ) -> TranscriptionWorker:
+    source = build_transcription_event_source(
+        app_config=app_config,
+        stdout=stdout,
+        sink=sink,
+        failure_sink=failure_sink,
+        stop_event=stop_event,
+        started_event=started_event,
+        poll_interval_seconds=poll_interval_seconds,
+        fail_fast=fail_fast,
+    )
+    if not isinstance(source, TranscriptionWorker):
+        raise TranscriptionError(
+            "build_worker requires the chunked transcription source."
+        )
+    return source
+
+
+def build_transcription_event_source(
+    *,
+    app_config: AppConfig | None = None,
+    stdout: TextIO | None = None,
+    sink: TranscriptEventSink | None = None,
+    failure_sink: Callable[[TranscriptionRuntimeFailure], object | None]
+    | None = None,
+    stop_event: threading.Event | None = None,
+    started_event: threading.Event | None = None,
+    poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
+    fail_fast: bool = False,
+) -> TranscriptEventSource:
     app_config = app_config or get_config()
+    if app_config.transcription_source_mode != TRANSCRIPTION_SOURCE_MODE_CHUNKED:
+        raise TranscriptionError(
+            "Unsupported TRANSCRIPTION_SOURCE_MODE "
+            f"{app_config.transcription_source_mode!r}: this runtime only "
+            f"implements {TRANSCRIPTION_SOURCE_MODE_CHUNKED!r}."
+        )
+
     extraction_config = AudioExtractionConfig.from_app_config(app_config)
     extractor = FFmpegAudioExtractor(extraction_config)
     transcriber = FasterWhisperTranscriber.from_app_config(app_config)

@@ -24,7 +24,8 @@ from services.switcher import (
     buffered_target_from_signal,
 )
 from transcript_router import TranscriptMessage, TranscriptRouter
-from transcription_worker import TranscriptionWorker, build_worker
+from transcription_worker import build_transcription_event_source
+from services.transcription_runtime import TranscriptEventSource
 
 
 HELP_TEXT = """
@@ -138,12 +139,12 @@ class LiveTranscriptQueueSink:
 
 
 class LiveTranscriptionSource:
-    """Runs the transcription worker in-process and exposes queued events."""
+    """Runs a transcript event source in-process and exposes queued events."""
 
     def __init__(
         self,
         *,
-        worker: TranscriptionWorker,
+        worker: TranscriptEventSource,
         event_queue: queue.Queue[TranscriptEvent],
         log=print,
         thread_factory=threading.Thread,
@@ -194,7 +195,10 @@ class LiveTranscriptionSource:
                 return
 
             self._stop_requested = True
-            self.worker.stop_event.set()
+            try:
+                self.worker.stop()
+            except AttributeError:
+                self.worker.stop_event.set()
             thread = self._thread
 
         if thread is not None and thread is not threading.current_thread():
@@ -205,7 +209,10 @@ class LiveTranscriptionSource:
 
     def _run(self) -> None:
         try:
-            self.worker.run_forever()
+            try:
+                self.worker.start()
+            except AttributeError:
+                self.worker.run_forever()
         except Exception as exc:
             self._startup_error = exc
             self.started_event.set()
@@ -388,14 +395,14 @@ def build_live_transcription_source(
         )
 
     started_event = threading.Event()
-    worker = build_worker(
+    source = build_transcription_event_source(
         app_config=config,
         sink=queue_sink,
         failure_sink=failure_sink,
         started_event=started_event,
     )
     return LiveTranscriptionSource(
-        worker=worker,
+        worker=source,
         event_queue=event_queue,
         log=log,
         started_event=started_event,

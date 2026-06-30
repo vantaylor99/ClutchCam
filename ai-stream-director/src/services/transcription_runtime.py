@@ -22,6 +22,16 @@ class TranscriptEventSink(Protocol):
         """Handle one transcript event."""
 
 
+class TranscriptEventSource(Protocol):
+    """Long-lived producer of normalized transcript events."""
+
+    def start(self) -> None:
+        """Start owned extractors, streams, and worker loops."""
+
+    def stop(self) -> None:
+        """Stop owned extractors, streams, and worker loops."""
+
+
 @dataclass(frozen=True)
 class TranscriptionRuntimeFailure:
     """One isolated audio-ref processing failure."""

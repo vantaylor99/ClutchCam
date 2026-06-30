@@ -18,6 +18,7 @@ from config import (  # noqa: E402
     SECRET_REDACTION,
     SCENES,
     TRANSCRIPTION_REQUEST_MODE_JSON,
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
     AppConfig,
 )
 from services.health import HealthResult  # noqa: E402
@@ -275,6 +276,7 @@ def _app_config(**overrides) -> AppConfig:
         "ingest_api_url": "rtmp://media-server:1935/live",
         "transcription_api_url": "http://transcription.example",
         "transcription_request_mode": TRANSCRIPTION_REQUEST_MODE_JSON,
+        "transcription_source_mode": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
         "transcription_endpoint_path": "",
         "transcription_model": "Systran/faster-whisper-small",
         "transcription_language": "",

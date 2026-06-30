@@ -530,6 +530,23 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertEqual(worker.run_calls, 1)
         self.assertTrue(worker.stop_event.is_set())
 
+    def test_live_transcription_source_starts_and_stops_generic_source(self) -> None:
+        started_event = threading.Event()
+        worker = FakeTranscriptEventSource(started_event=started_event)
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            started_event=started_event,
+            startup_timeout_seconds=0.5,
+            log=lambda message: None,
+        )
+
+        source.start()
+        source.stop()
+
+        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(worker.stop_calls, 1)
+
     def test_accepted_ai_decision_resolves_buffered_switch_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_switcher = BufferBackedSwitcher(
@@ -643,6 +660,23 @@ class FakeLiveWorker:
         if self.started_event is not None:
             self.started_event.set()
         self.stop_event.wait(1.0)
+
+
+class FakeTranscriptEventSource:
+    def __init__(self, *, started_event: threading.Event) -> None:
+        self.started_event = started_event
+        self.stop_event = threading.Event()
+        self.start_calls = 0
+        self.stop_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+        self.started_event.set()
+        self.stop_event.wait(1.0)
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.stop_event.set()
 
 
 class FakeLoopScheduler:
