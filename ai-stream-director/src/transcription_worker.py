@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import signal
 import sys
 import threading
@@ -44,6 +45,7 @@ from services.transcription_runtime import (
 
 POLL_INTERVAL_SECONDS = 0.5
 PCM_S16_MAX = 32768.0
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -281,7 +283,7 @@ class VadUtteranceAudioWindowDiscovery:
         *,
         extraction_config: AudioExtractionConfig,
         vad_config: VadUtteranceConfig,
-        logger=None,
+        logger: logging.Logger = LOGGER,
     ) -> None:
         self.base_discovery = base_discovery
         self.extraction_config = extraction_config
@@ -328,23 +330,31 @@ class VadUtteranceAudioWindowDiscovery:
             )
 
     def _process_chunk(self, chunk_ref: AudioInputRef) -> tuple[AudioInputRef, ...]:
+        state = self._states.get(chunk_ref.stream_id)
+        if state is None:
+            self._log_chunk_skipped(
+                chunk_ref.stream_id,
+                _local_file_path_from_uri(chunk_ref.uri),
+                "unknown stream ID",
+            )
+            return ()
         if chunk_ref.starts_at_seconds is None:
+            self._reset_state(state)
+            self._log_chunk_skipped(
+                chunk_ref.stream_id,
+                _local_file_path_from_uri(chunk_ref.uri),
+                "missing media start timestamp",
+            )
             return ()
         chunk_path = _local_file_path_from_uri(chunk_ref.uri)
         try:
             frames, sample_rate = self._read_chunk_frames(chunk_path, chunk_ref)
         except TranscriptionError as exc:
-            if self._logger is not None:
-                self._logger.warning(
-                    "transcription_vad_chunk_skipped stream=%s chunk=%s error=%r",
-                    chunk_ref.stream_id,
-                    chunk_path,
-                    str(exc),
-                )
+            self._reset_state(state)
+            self._log_chunk_skipped(chunk_ref.stream_id, chunk_path, str(exc))
             return ()
 
         output_refs: list[AudioInputRef] = []
-        state = self._states[chunk_ref.stream_id]
         for frame in frames:
             finalized = self._process_frame(state, frame)
             if finalized is not None:
@@ -413,6 +423,8 @@ class VadUtteranceAudioWindowDiscovery:
                 )
             )
             offset += bytes_per_frame
+        if not frames:
+            raise TranscriptionError("Empty VAD WAV chunk.")
         return tuple(frames), sample_rate
 
     def _process_frame(
@@ -505,6 +517,10 @@ class VadUtteranceAudioWindowDiscovery:
         state.speech_seconds = 0.0
         state.silence_seconds = 0.0
 
+    def _reset_state(self, state: _VadStreamState) -> None:
+        self._discard_active(state)
+        state.leading_frames.clear()
+
     def _write_utterance_ref(
         self,
         stream_id: str,
@@ -542,6 +558,19 @@ class VadUtteranceAudioWindowDiscovery:
                 stale_path.unlink(missing_ok=True)
             except OSError:
                 continue
+
+    def _log_chunk_skipped(
+        self,
+        stream_id: str,
+        chunk_path: Path,
+        reason: str,
+    ) -> None:
+        self._logger.warning(
+            "transcription_vad_chunk_skipped stream=%s chunk=%s error=%r",
+            stream_id,
+            chunk_path,
+            reason,
+        )
 
 
 class TranscriptionWorker:

@@ -7,7 +7,7 @@ import threading
 import unittest
 import wave
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -495,12 +495,64 @@ class VadUtteranceAudioWindowDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0].starts_at_seconds, 0.4)
 
+    def test_unreadable_chunk_resets_active_speech_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first = root / "000000000.wav"
+            bad = root / "000000001.wav"
+            later = root / "000000002.wav"
+            _write_pcm_wav(first, [12000, 12000], framerate=10)
+            bad.write_bytes(b"not wav")
+            _write_pcm_wav(later, [12000, 12000, 0, 0], framerate=10)
+            logger = Mock()
+            discovery = self._discovery(
+                root,
+                (
+                    self._ref(first, 0.0),
+                    self._ref(bad, 0.2),
+                    self._ref(later, 0.4),
+                ),
+                logger=logger,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+        logger.warning.assert_called()
+
+    def test_empty_wav_chunk_is_skipped_with_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            empty = root / "000000000.wav"
+            good = root / "000000001.wav"
+            _write_pcm_wav(empty, [], framerate=10)
+            _write_pcm_wav(good, [12000, 12000, 0, 0], framerate=10)
+            logger = Mock()
+            discovery = self._discovery(
+                root,
+                (self._ref(empty, 0.0), self._ref(good, 0.4)),
+                logger=logger,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+        self.assertTrue(
+            any(
+                "Empty VAD WAV chunk" in str(call.args)
+                for call in logger.warning.call_args_list
+            )
+        )
+
     def _discovery(
         self,
         root: Path,
         refs: tuple[AudioInputRef, ...],
         *,
         vad_config: VadUtteranceConfig | None = None,
+        logger: Mock | None = None,
     ) -> VadUtteranceAudioWindowDiscovery:
         extraction_config = AudioExtractionConfig(
             output_dir=root,
@@ -522,6 +574,7 @@ class VadUtteranceAudioWindowDiscoveryTests(unittest.TestCase):
                 trailing_padding_seconds=0.2,
                 max_utterance_seconds=1.0,
             ),
+            logger=logger or Mock(),
         )
 
     def _ref(self, path: Path, starts_at_seconds: float) -> AudioInputRef:
