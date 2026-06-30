@@ -189,9 +189,7 @@ Success criteria:
 
 ## Tess Ticket Map
 
-Active review tickets:
-
-- `tickets/review/49.2-vad-transcription-runtime-validation-docs.md`
+Active review tickets: none.
 
 Active implement tickets: none.
 
@@ -259,6 +257,7 @@ Completed review tickets:
 - `tickets/complete/48-overlapped-transcription-audio-windows.md`
 - `tickets/complete/49-streaming-transcription-source-boundary.md`
 - `tickets/complete/49.1-vad-utterance-audio-windows.md`
+- `tickets/complete/49.2-vad-transcription-runtime-validation-docs.md`
 
 Backlog tickets:
 
