@@ -121,25 +121,29 @@ class TranscriptTriggerPrefilter:
             return None
 
         newest = context.transcripts[-1]
-        normalized = _normalize_text(newest.text)
-        if not self._is_signal_text(normalized):
-            return None
-
         trigger_time = (
             context.reference_time_seconds
             if context.reference_time_seconds is not None
             else newest.end_time_seconds
         )
+        candidate_text = self._candidate_text(
+            transcripts=context.transcripts,
+            target_index=len(context.transcripts) - 1,
+            trigger_time_seconds=newest.end_time_seconds,
+        )
+        if not self._is_signal_text(candidate_text):
+            return None
+
         if self._is_recent_duplicate(
-            normalized_text=normalized,
-            newest=newest,
+            candidate_text=candidate_text,
+            newest_index=len(context.transcripts) - 1,
             trigger_time_seconds=trigger_time,
-            transcripts=self._recent_history(trigger_time, context.transcripts[:-1]),
+            transcripts=context.transcripts,
         ):
             return None
 
-        phrase = self._matched_hype_phrase(normalized)
-        confidence = self._confidence_for_phrase(phrase, normalized)
+        phrase = self._matched_hype_phrase(candidate_text)
+        confidence = self._confidence_for_phrase(phrase, candidate_text)
         if confidence < self.config.min_confidence:
             return None
 
@@ -147,7 +151,7 @@ class TranscriptTriggerPrefilter:
             stream_id=newest.stream_id,
             trigger_time_seconds=trigger_time,
             confidence=confidence,
-            reason=_reason_for_phrase(phrase, normalized),
+            reason=_reason_for_phrase(phrase, candidate_text),
             source="transcript",
         )
 
@@ -182,22 +186,28 @@ class TranscriptTriggerPrefilter:
     def _is_recent_duplicate(
         self,
         *,
-        normalized_text: str,
-        newest: TranscriptEvent,
+        candidate_text: str,
+        newest_index: int,
         trigger_time_seconds: float,
         transcripts: Sequence[TranscriptEvent],
     ) -> bool:
         if self.config.duplicate_window_seconds <= 0:
             return False
 
-        for event in reversed(transcripts):
+        for index in range(newest_index - 1, -1, -1):
+            event = transcripts[index]
             if trigger_time_seconds - event.end_time_seconds > self.config.duplicate_window_seconds:
                 break
-            if _normalize_text(event.text) == normalized_text:
+            prior_candidate_text = self._candidate_text(
+                transcripts=transcripts,
+                target_index=index,
+                trigger_time_seconds=event.end_time_seconds,
+            )
+            if prior_candidate_text == candidate_text:
                 return True
             if self._same_hype_phrase(
-                normalized_text,
-                _normalize_text(event.text),
+                candidate_text,
+                prior_candidate_text,
             ):
                 return True
 
@@ -219,6 +229,39 @@ class TranscriptTriggerPrefilter:
         return tuple(
             event for event in transcripts if event.end_time_seconds >= cutoff
         )
+
+    def _candidate_text(
+        self,
+        *,
+        transcripts: Sequence[TranscriptEvent],
+        target_index: int,
+        trigger_time_seconds: float,
+    ) -> str:
+        return _normalize_text(
+            " ".join(
+                event.text
+                for event in self._candidate_events(
+                    transcripts=transcripts,
+                    target_index=target_index,
+                    trigger_time_seconds=trigger_time_seconds,
+                )
+            )
+        )
+
+    def _candidate_events(
+        self,
+        *,
+        transcripts: Sequence[TranscriptEvent],
+        target_index: int,
+        trigger_time_seconds: float,
+    ) -> tuple[TranscriptEvent, ...]:
+        target = transcripts[target_index]
+        same_stream_events = (
+            event
+            for event in transcripts[: target_index + 1]
+            if event.stream_id == target.stream_id
+        )
+        return self._recent_history(trigger_time_seconds, tuple(same_stream_events))
 
 
 def _normalize_text(text: str) -> str:

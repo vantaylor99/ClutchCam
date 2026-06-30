@@ -109,6 +109,54 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertTrue(result.ai_evaluation_attempted)
         self.assertEqual(result.reason, "decision_evaluated")
 
+    def test_split_transcript_fragments_reach_ai_director_on_second_event(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 reacted to a moment.",
+        )
+
+        first_result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="holy",
+                start_time_seconds=20.0,
+                end_time_seconds=21.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+        second_result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="cow",
+                start_time_seconds=21.5,
+                end_time_seconds=22.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy\nplayer_2: cow",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(first_result.reason, "prefilter_rejected")
+        self.assertEqual(candidate_signal.stream_id, "player_2")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 22.0)
+        self.assertIn("excitement phrase: holy cow", candidate_signal.reason)
+        self.assertIs(second_result.candidate_signal, candidate_signal)
+        self.assertEqual(second_result.reason, "decision_evaluated")
+
     def test_ai_disabled_runtime_event_skips_model_call_after_routing(self) -> None:
         scheduler = _started_scheduler()
         scheduler.set_ai_enabled(False)

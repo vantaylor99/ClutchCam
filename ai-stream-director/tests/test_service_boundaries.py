@@ -167,6 +167,43 @@ class AIBoundaryTests(unittest.TestCase):
         self.assertEqual(signal.source, "transcript")
         self.assertIn("excitement phrase", signal.reason)
 
+    def test_transcript_prefilter_accepts_split_same_stream_hype_phrase(self) -> None:
+        previous = TranscriptEvent("player_2", "holy", 10.0, 11.0)
+        newest = TranscriptEvent("player_2", "cow", 11.5, 12.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(
+                transcripts=(previous, newest),
+                reference_time_seconds=21.0,
+            )
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.stream_id, "player_2")
+        self.assertEqual(signal.trigger_time_seconds, 21.0)
+        self.assertIn("excitement phrase: holy cow", signal.reason)
+
+    def test_transcript_prefilter_rejects_split_phrase_outside_context_window(self) -> None:
+        classifier = TranscriptTriggerPrefilter(
+            TranscriptTriggerPrefilterConfig(context_window_seconds=2.0)
+        )
+        previous = TranscriptEvent("player_2", "holy", 9.0, 10.0)
+        newest = TranscriptEvent("player_2", "cow", 12.5, 13.0)
+
+        signal = classifier.classify(HypeContext(transcripts=(previous, newest)))
+
+        self.assertIsNone(signal)
+
+    def test_transcript_prefilter_does_not_join_other_stream_fragments(self) -> None:
+        previous = TranscriptEvent("player_1", "holy", 10.0, 11.0)
+        newest = TranscriptEvent("player_2", "cow", 11.5, 12.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(previous, newest))
+        )
+
+        self.assertIsNone(signal)
+
     def test_transcript_prefilter_rejects_filler_and_short_noise(self) -> None:
         classifier = TranscriptTriggerPrefilter()
         filler = TranscriptEvent("player_1", "yeah", 1.0, 1.5)
@@ -210,6 +247,39 @@ class AIBoundaryTests(unittest.TestCase):
 
         signal = TranscriptTriggerPrefilter().classify(
             HypeContext(transcripts=(previous, newest))
+        )
+
+        self.assertIsNone(signal)
+
+    def test_transcript_prefilter_rejects_repeated_split_phrase_inside_duplicate_window(self) -> None:
+        classifier = TranscriptTriggerPrefilter()
+        first_holy = TranscriptEvent("player_2", "holy", 10.0, 11.0)
+        first_cow = TranscriptEvent("player_2", "cow", 11.5, 12.0)
+        second_holy = TranscriptEvent("player_2", "holy", 14.0, 15.0)
+        second_cow = TranscriptEvent("player_2", "cow", 15.5, 16.0)
+
+        first_signal = classifier.classify(
+            HypeContext(transcripts=(first_holy, first_cow))
+        )
+        second_signal = classifier.classify(
+            HypeContext(
+                transcripts=(first_holy, first_cow, second_holy, second_cow)
+            )
+        )
+
+        self.assertIsNotNone(first_signal)
+        self.assertIsNone(second_signal)
+
+    def test_transcript_prefilter_rejects_cross_stream_repeated_split_phrase_inside_duplicate_window(self) -> None:
+        first_holy = TranscriptEvent("player_1", "holy", 10.0, 11.0)
+        first_cow = TranscriptEvent("player_1", "cow", 11.5, 12.0)
+        second_holy = TranscriptEvent("player_3", "holy", 14.0, 15.0)
+        second_cow = TranscriptEvent("player_3", "cow", 15.5, 16.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(
+                transcripts=(first_holy, first_cow, second_holy, second_cow)
+            )
         )
 
         self.assertIsNone(signal)
