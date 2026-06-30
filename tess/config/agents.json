@@ -19,9 +19,9 @@
   },
   "codex": {
     "model": {
-      "easy": "gpt-5",
-      "medium": "gpt-5",
-      "hard": "gpt-5"
+      "easy": "gpt-5.5",
+      "medium": "gpt-5.5",
+      "hard": "gpt-5.5"
     }
   }
 }
