@@ -73,6 +73,42 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
             123.25,
         )
 
+    def test_added_gaming_callout_reaches_ai_director(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 made a strong play.",
+        )
+
+        result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="that was nasty",
+                start_time_seconds=20.0,
+                end_time_seconds=21.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: that was nasty",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(candidate_signal.stream_id, "player_2")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 21.0)
+        self.assertIn("gaming callout phrase", candidate_signal.reason)
+        self.assertIs(result.candidate_signal, candidate_signal)
+        self.assertTrue(result.ai_evaluation_attempted)
+        self.assertEqual(result.reason, "decision_evaluated")
+
     def test_ai_disabled_runtime_event_skips_model_call_after_routing(self) -> None:
         scheduler = _started_scheduler()
         scheduler.set_ai_enabled(False)

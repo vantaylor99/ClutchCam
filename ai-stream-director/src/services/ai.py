@@ -61,6 +61,14 @@ class TranscriptTriggerPrefilterConfig:
         "insane",
         "huge",
         "unbelievable",
+        "that was nasty",
+        "behind you",
+        "good work",
+        "triple",
+        "legend",
+    )
+    short_hype_phrases: Sequence[str] = (
+        "help",
     )
     filler_phrases: Sequence[str] = (
         "ok",
@@ -101,6 +109,9 @@ class TranscriptTriggerPrefilter:
         self._hype_phrases = tuple(
             _normalize_text(phrase) for phrase in self.config.hype_phrases
         )
+        self._short_hype_phrases = {
+            _normalize_text(phrase) for phrase in self.config.short_hype_phrases
+        }
         self._filler_phrases = {
             _normalize_text(phrase) for phrase in self.config.filler_phrases
         }
@@ -141,15 +152,19 @@ class TranscriptTriggerPrefilter:
         )
 
     def _is_signal_text(self, normalized: str) -> bool:
-        if len(normalized) < self.config.min_text_characters:
-            return False
         if normalized in self._filler_phrases:
             return False
         if not re.search(r"[a-z0-9]", normalized):
             return False
+        if normalized in self._short_hype_phrases:
+            return True
+        if len(normalized) < self.config.min_text_characters:
+            return False
         return self._matched_hype_phrase(normalized) is not None
 
     def _matched_hype_phrase(self, normalized: str) -> str | None:
+        if normalized in self._short_hype_phrases:
+            return normalized
         for phrase in self._hype_phrases:
             if phrase and phrase in normalized:
                 return phrase
@@ -220,6 +235,15 @@ def _reason_for_phrase(phrase: str | None, normalized: str) -> str:
         return f"Matched discovery phrase: {phrase}."
     if phrase in {"rare", "boss", "diamonds"}:
         return f"Matched gameplay phrase: {phrase}."
+    if phrase in {
+        "that was nasty",
+        "behind you",
+        "good work",
+        "triple",
+        "legend",
+        "help",
+    }:
+        return f"Matched gaming callout phrase: {phrase}."
     if phrase in {"holy cow", "holy crap", "oh my god", "omg", "no way"}:
         return f"Matched excitement phrase: {phrase}."
     return f"Matched trigger phrase: {phrase}."
