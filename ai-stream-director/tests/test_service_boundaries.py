@@ -241,6 +241,17 @@ class AIBoundaryTests(unittest.TestCase):
         self.assertIn("gaming callout phrase: help", signal.reason)
         self.assertIsNone(classifier.classify(HypeContext(transcripts=(short_filler,))))
 
+    def test_transcript_prefilter_accepts_short_help_after_prior_context(self) -> None:
+        previous = TranscriptEvent("player_1", "checking stairs", 3.0, 4.0)
+        help_event = TranscriptEvent("player_1", "help", 5.0, 6.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(previous, help_event))
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIn("gaming callout phrase: help", signal.reason)
+
     def test_transcript_prefilter_rejects_recent_duplicates_across_streams(self) -> None:
         previous = TranscriptEvent("player_1", "holy cow, this is huge", 10.0, 11.0)
         newest = TranscriptEvent("player_3", "Holy cow, look here", 12.0, 13.0)
@@ -283,6 +294,27 @@ class AIBoundaryTests(unittest.TestCase):
         )
 
         self.assertIsNone(signal)
+
+    def test_transcript_prefilter_does_not_retrigger_stale_context_phrase(self) -> None:
+        old_signal = TranscriptEvent("player_2", "holy cow", 10.0, 11.0)
+        newest_filler = TranscriptEvent("player_2", "okay", 29.0, 30.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(old_signal, newest_filler))
+        )
+
+        self.assertIsNone(signal)
+
+    def test_transcript_prefilter_accepts_newer_same_stream_phrase_after_old_signal(self) -> None:
+        old_signal = TranscriptEvent("player_2", "holy cow", 10.0, 11.0)
+        newest_signal = TranscriptEvent("player_2", "look at this", 14.0, 15.0)
+
+        signal = TranscriptTriggerPrefilter().classify(
+            HypeContext(transcripts=(old_signal, newest_signal))
+        )
+
+        self.assertIsNotNone(signal)
+        self.assertIn("trigger phrase: look at this", signal.reason)
 
     def test_transcript_prefilter_rejects_repeated_gaming_callout_across_streams(self) -> None:
         previous = TranscriptEvent("player_1", "behind you on the stairs", 10.0, 11.0)

@@ -131,18 +131,23 @@ class TranscriptTriggerPrefilter:
             target_index=len(context.transcripts) - 1,
             trigger_time_seconds=newest.end_time_seconds,
         )
-        if not self._is_signal_text(candidate_text):
+        phrase = self._matched_target_hype_phrase(
+            transcripts=context.transcripts,
+            target_index=len(context.transcripts) - 1,
+            trigger_time_seconds=newest.end_time_seconds,
+        )
+        if not self._is_signal_text(candidate_text, phrase=phrase):
             return None
 
         if self._is_recent_duplicate(
             candidate_text=candidate_text,
+            phrase=phrase,
             newest_index=len(context.transcripts) - 1,
             trigger_time_seconds=trigger_time,
             transcripts=context.transcripts,
         ):
             return None
 
-        phrase = self._matched_hype_phrase(candidate_text)
         confidence = self._confidence_for_phrase(phrase, candidate_text)
         if confidence < self.config.min_confidence:
             return None
@@ -155,24 +160,16 @@ class TranscriptTriggerPrefilter:
             source="transcript",
         )
 
-    def _is_signal_text(self, normalized: str) -> bool:
+    def _is_signal_text(self, normalized: str, *, phrase: str | None = None) -> bool:
         if normalized in self._filler_phrases:
             return False
         if not re.search(r"[a-z0-9]", normalized):
             return False
-        if normalized in self._short_hype_phrases:
+        if phrase in self._short_hype_phrases:
             return True
         if len(normalized) < self.config.min_text_characters:
             return False
-        return self._matched_hype_phrase(normalized) is not None
-
-    def _matched_hype_phrase(self, normalized: str) -> str | None:
-        if normalized in self._short_hype_phrases:
-            return normalized
-        for phrase in self._hype_phrases:
-            if phrase and phrase in normalized:
-                return phrase
-        return None
+        return phrase is not None
 
     def _confidence_for_phrase(self, phrase: str | None, normalized: str) -> float:
         if phrase is None:
@@ -187,6 +184,7 @@ class TranscriptTriggerPrefilter:
         self,
         *,
         candidate_text: str,
+        phrase: str | None,
         newest_index: int,
         trigger_time_seconds: float,
         transcripts: Sequence[TranscriptEvent],
@@ -205,30 +203,15 @@ class TranscriptTriggerPrefilter:
             )
             if prior_candidate_text == candidate_text:
                 return True
-            if self._same_hype_phrase(
-                candidate_text,
-                prior_candidate_text,
-            ):
+            prior_phrase = self._matched_target_hype_phrase(
+                transcripts=transcripts,
+                target_index=index,
+                trigger_time_seconds=event.end_time_seconds,
+            )
+            if phrase is not None and phrase == prior_phrase:
                 return True
 
         return False
-
-    def _same_hype_phrase(self, left: str, right: str) -> bool:
-        left_phrase = self._matched_hype_phrase(left)
-        return left_phrase is not None and left_phrase == self._matched_hype_phrase(right)
-
-    def _recent_history(
-        self,
-        trigger_time_seconds: float,
-        transcripts: Sequence[TranscriptEvent],
-    ) -> tuple[TranscriptEvent, ...]:
-        if self.config.context_window_seconds <= 0:
-            return tuple(transcripts)
-
-        cutoff = trigger_time_seconds - self.config.context_window_seconds
-        return tuple(
-            event for event in transcripts if event.end_time_seconds >= cutoff
-        )
 
     def _candidate_text(
         self,
@@ -237,31 +220,78 @@ class TranscriptTriggerPrefilter:
         target_index: int,
         trigger_time_seconds: float,
     ) -> str:
-        return _normalize_text(
-            " ".join(
-                event.text
-                for event in self._candidate_events(
-                    transcripts=transcripts,
-                    target_index=target_index,
-                    trigger_time_seconds=trigger_time_seconds,
-                )
+        return " ".join(
+            part
+            for _, part in self._candidate_parts(
+                transcripts=transcripts,
+                target_index=target_index,
+                trigger_time_seconds=trigger_time_seconds,
             )
         )
 
-    def _candidate_events(
+    def _matched_target_hype_phrase(
         self,
         *,
         transcripts: Sequence[TranscriptEvent],
         target_index: int,
         trigger_time_seconds: float,
-    ) -> tuple[TranscriptEvent, ...]:
+    ) -> str | None:
+        text = ""
+        target_span: tuple[int, int] | None = None
+        for index, part in self._candidate_parts(
+            transcripts=transcripts,
+            target_index=target_index,
+            trigger_time_seconds=trigger_time_seconds,
+        ):
+            if text:
+                text += " "
+            start = len(text)
+            text += part
+            end = len(text)
+            if index == target_index:
+                target_span = (start, end)
+
+        if target_span is None:
+            return None
+
+        target_text = text[target_span[0] : target_span[1]]
+        if target_text in self._short_hype_phrases:
+            return target_text
+
+        for phrase in self._hype_phrases:
+            if not phrase:
+                continue
+            start = text.find(phrase)
+            while start != -1:
+                end = start + len(phrase)
+                if start < target_span[1] and end > target_span[0]:
+                    return phrase
+                start = text.find(phrase, start + 1)
+        return None
+
+    def _candidate_parts(
+        self,
+        *,
+        transcripts: Sequence[TranscriptEvent],
+        target_index: int,
+        trigger_time_seconds: float,
+    ) -> tuple[tuple[int, str], ...]:
         target = transcripts[target_index]
-        same_stream_events = (
-            event
-            for event in transcripts[: target_index + 1]
-            if event.stream_id == target.stream_id
-        )
-        return self._recent_history(trigger_time_seconds, tuple(same_stream_events))
+        if self.config.context_window_seconds <= 0:
+            cutoff = None
+        else:
+            cutoff = trigger_time_seconds - self.config.context_window_seconds
+
+        parts = []
+        for index, event in enumerate(transcripts[: target_index + 1]):
+            if event.stream_id != target.stream_id:
+                continue
+            if cutoff is not None and event.end_time_seconds < cutoff:
+                continue
+            part = _normalize_text(event.text)
+            if part:
+                parts.append((index, part))
+        return tuple(parts)
 
 
 def _normalize_text(text: str) -> str:
