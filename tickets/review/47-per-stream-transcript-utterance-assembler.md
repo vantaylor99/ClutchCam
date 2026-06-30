@@ -1,3 +1,10 @@
+<!-- resume-note -->
+RESUME: A prior agent run on this ticket did not complete.
+  Prior run: 2026-06-30T04:40:14.961Z (agent: codex)
+  Log file: C:\ClutchCam\tickets\.logs\47-per-stream-transcript-utterance-assembler.review.2026-06-30T04-40-14-961Z.log
+Read the log to see what was done. Resume where it left off.
+If the prior run hit a timeout or repeated error, be cautious not to rush into the same situation.
+<!-- /resume-note -->
 description: Group nearby speech from the same player before trigger checks so reactions are judged by what was said, not by speech-to-text chunk boundaries.
 prereq: transcript-prefilter-recent-context-boundaries
 files: ai-stream-director/src/transcript_router.py, ai-stream-director/src/main.py, ai-stream-director/src/config.py, ai-stream-director/scripts/latency_soak_harness.py, ai-stream-director/.env.example, ai-stream-director/docker-compose.yml, docs/ARCHITECTURE.md, ai-stream-director/tests/test_transcription_event_api.py, ai-stream-director/tests/test_runtime_event_pipeline.py, ai-stream-director/tests/test_dry_run_obs.py, ai-stream-director/tests/test_runtime_healthcheck_entrypoints.py, ai-stream-director/tests/test_contracts.py
