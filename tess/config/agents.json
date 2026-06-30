@@ -16,5 +16,12 @@
     "overrides": {
       "review": { "easy": { "model": "claude-opus-4-8", "effort": "medium" } }
     }
+  },
+  "codex": {
+    "model": {
+      "easy": "gpt-5",
+      "medium": "gpt-5",
+      "hard": "gpt-5"
+    }
   }
 }
