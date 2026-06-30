@@ -410,6 +410,14 @@ TRANSCRIPTION_LANGUAGE=
 TRANSCRIPTION_RESPONSE_FORMAT=json
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
 TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0
+# Used only when TRANSCRIPTION_SOURCE_MODE=vad-utterance.
+TRANSCRIPTION_VAD_FRAME_MS=30
+TRANSCRIPTION_VAD_ENERGY_THRESHOLD=0.015
+TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS=0.18
+TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS=0.45
+TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS=0.18
+TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS=0.24
+TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS=12
 LIVE_TRANSCRIPTION_ENABLED=false
 LIVE_TRANSCRIPTION_QUEUE_SIZE=16
 TRANSCRIPT_LOG_TEXT_ENABLED=false
@@ -424,17 +432,34 @@ For transcript quality evaluation, `TRANSCRIPT_LOG_TEXT_ENABLED=true` logs
 accepted runtime transcript text before prefiltering. Keep it disabled for
 normal runs because player speech can be sensitive.
 `TRANSCRIPTION_SOURCE_MODE=chunked` keeps the current fixed audio chunk
-discovery path. `vad-utterance` is a reserved normalized mode for a future
-voice-activity-detection source and currently fails at startup with a clear
-unsupported-mode error.
+discovery path and is the default fallback. `vad-utterance` is optional: FFmpeg
+still normalizes each player stream to mono `pcm_s16le` WAV chunks, then local
+voice activity detection groups speech around pauses before sending an
+utterance-sized WAV request to the configured transcription provider. Provider
+responses still normalize to `TranscriptEvent`; final transcript events then
+flow through `TranscriptRouter`, the local prefilter, and the AI director just
+like fixed-chunk events. `TRANSCRIPTION_REQUEST_MODE` remains a separate
+provider upload/API-shape setting.
+
+Before using `vad-utterance` live, compare it with `chunked` on the same
+fixtures or rehearsal stream. Track missed trigger phrases, duplicate triggers,
+latency from speech end to accepted transcript event, host CPU/GPU use,
+provider request count and duration, and backend cost when the endpoint is
+metered. If VAD startup reports incompatible extraction settings, set
+`TRANSCRIPTION_SOURCE_MODE=chunked` to return to fixed chunks.
 
 ## Standalone Transcription Worker Diagnostics
 
 The `transcription-worker` Compose service is an explicit diagnostic and
 healthcheck target. It emits JSONL transcript and failure records from the same
 FFmpeg and transcription adapter boundaries, but it is not part of the default
-integrated local Linux profile set. Run it only when you want to inspect that
-path separately:
+integrated local Linux profile set. When built from runtime config, each
+diagnostic record includes `transcription_source_mode` and
+`transcription_request_mode` so `chunked` and `vad-utterance` runs can be
+compared from JSONL. This diagnostic path includes transcript text in event
+records; the integrated orchestrator keeps transcript text out of logs unless
+`TRANSCRIPT_LOG_TEXT_ENABLED=true`. Run the standalone worker only when you
+want to inspect that path separately:
 
 ```bash
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \

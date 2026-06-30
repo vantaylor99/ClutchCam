@@ -109,6 +109,42 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertTrue(result.ai_evaluation_attempted)
         self.assertEqual(result.reason, "decision_evaluated")
 
+    def test_vad_final_event_uses_existing_router_and_ai_path(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_1"],
+            confidence=0.92,
+            duration_seconds=10,
+            reason="Player 1 called out a rare find.",
+        )
+
+        result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_1",
+                text="no way I found diamonds",
+                start_time_seconds=120.4,
+                end_time_seconds=122.0,
+                is_final=True,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_1: no way I found diamonds",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(candidate_signal.stream_id, "player_1")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 122.0)
+        self.assertIn("no way", candidate_signal.reason)
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reason, "decision_evaluated")
+
     def test_split_transcript_fragments_reach_ai_director_on_second_event(self) -> None:
         scheduler = _started_scheduler()
         router = TranscriptRouter(history_seconds=30, max_messages=20)

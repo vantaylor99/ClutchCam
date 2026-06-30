@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Callable, TextIO
+from typing import Callable, Mapping, TextIO
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
@@ -113,29 +113,42 @@ class AudioChunkDiscovery:
 class JsonLinesTranscriptSink:
     """Writes transcript and worker status events as JSON lines."""
 
-    def __init__(self, stream: TextIO | None = None) -> None:
+    def __init__(
+        self,
+        stream: TextIO | None = None,
+        *,
+        diagnostic_fields: Mapping[str, object] | None = None,
+    ) -> None:
         self.stream = stream or sys.stdout
+        self.diagnostic_fields = dict(diagnostic_fields or {})
         self._lock = threading.Lock()
 
     def __call__(self, event: TranscriptEvent) -> dict[str, object]:
-        payload = transcript_event_payload(event)
+        payload = self._with_diagnostics(transcript_event_payload(event))
         self.write(payload)
         return payload
 
     def write_failure(self, failure: TranscriptionRuntimeFailure) -> None:
-        self.write(transcription_failure_payload(failure))
+        self.write(self._with_diagnostics(transcription_failure_payload(failure)))
 
     def write_worker_error(self, error: Exception) -> None:
         self.write(
-            {
-                "type": "transcription_worker_error",
-                "message": str(error),
-            }
+            self._with_diagnostics(
+                {
+                    "type": "transcription_worker_error",
+                    "message": str(error),
+                }
+            )
         )
 
     def write(self, payload: dict[str, object]) -> None:
         with self._lock:
             print(json.dumps(payload, sort_keys=True), file=self.stream, flush=True)
+
+    def _with_diagnostics(self, payload: dict[str, object]) -> dict[str, object]:
+        if not self.diagnostic_fields:
+            return payload
+        return {**payload, **self.diagnostic_fields}
 
 
 class CompletedAudioChunkDiscovery:
@@ -316,17 +329,20 @@ class VadUtteranceAudioWindowDiscovery:
         if self.extraction_config.container.strip().lower() != "wav":
             raise TranscriptionError(
                 "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
-                "AUDIO_EXTRACT_CONTAINER=wav."
+                "AUDIO_EXTRACT_CONTAINER=wav. Use "
+                "TRANSCRIPTION_SOURCE_MODE=chunked to return to fixed chunks."
             )
         if self.extraction_config.channels != 1:
             raise TranscriptionError(
                 "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
-                "AUDIO_EXTRACT_CHANNELS=1."
+                "AUDIO_EXTRACT_CHANNELS=1. Use "
+                "TRANSCRIPTION_SOURCE_MODE=chunked to return to fixed chunks."
             )
         if self.extraction_config.codec.strip().lower() != "pcm_s16le":
             raise TranscriptionError(
                 "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
-                "AUDIO_EXTRACT_CODEC=pcm_s16le."
+                "AUDIO_EXTRACT_CODEC=pcm_s16le. Use "
+                "TRANSCRIPTION_SOURCE_MODE=chunked to return to fixed chunks."
             )
 
     def _process_chunk(self, chunk_ref: AudioInputRef) -> tuple[AudioInputRef, ...]:
@@ -731,7 +747,13 @@ def build_transcription_event_source(
     extraction_config = AudioExtractionConfig.from_app_config(app_config)
     extractor = FFmpegAudioExtractor(extraction_config)
     transcriber = FasterWhisperTranscriber.from_app_config(app_config)
-    jsonl_sink = JsonLinesTranscriptSink(stdout)
+    jsonl_sink = JsonLinesTranscriptSink(
+        stdout,
+        diagnostic_fields={
+            "transcription_request_mode": app_config.transcription_request_mode,
+            "transcription_source_mode": app_config.transcription_source_mode,
+        },
+    )
     discovery: AudioChunkDiscovery = CompletedAudioChunkDiscovery(
         extraction_config,
         extractor,

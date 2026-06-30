@@ -173,6 +173,25 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertIsInstance(source, TranscriptionWorker)
         self.assertIsInstance(source.discovery, VadUtteranceAudioWindowDiscovery)
 
+    def test_vad_utterance_incompatible_extraction_points_to_chunked_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "TRANSCRIPTION_SOURCE_MODE": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "AUDIO_EXTRACT_CONTAINER": "mp3",
+                },
+                clear=True,
+            ):
+                config = get_config()
+
+        with self.assertRaisesRegex(
+            TranscriptionError,
+            "TRANSCRIPTION_SOURCE_MODE=chunked",
+        ):
+            build_transcription_event_source(app_config=config)
+
     def test_chunked_source_start_and_stop_wrap_worker_lifecycle(self) -> None:
         stop_event = threading.Event()
         extractor = FakeExtractor()
@@ -373,6 +392,33 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
                 "is_final": False,
             },
         )
+
+    def test_jsonl_sink_can_include_selected_transcription_modes(self) -> None:
+        stream = io.StringIO()
+        sink = JsonLinesTranscriptSink(
+            stream,
+            diagnostic_fields={
+                "transcription_request_mode": "openai-compatible",
+                "transcription_source_mode": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+            },
+        )
+
+        sink(
+            TranscriptEvent(
+                stream_id="player_4",
+                text="found it",
+                start_time_seconds=12.5,
+                end_time_seconds=14.0,
+            )
+        )
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["type"], "transcript_event")
+        self.assertEqual(
+            payload["transcription_source_mode"],
+            TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+        )
+        self.assertEqual(payload["transcription_request_mode"], "openai-compatible")
 
     def test_signal_stop_request_allows_worker_cleanup(self) -> None:
         stop_event = threading.Event()

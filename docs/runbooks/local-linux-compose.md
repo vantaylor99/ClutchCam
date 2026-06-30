@@ -41,6 +41,10 @@ service, a host service, or a remote service, then choose
 contract or `TRANSCRIPTION_REQUEST_MODE=openai-compatible` for multipart
 uploads to `/v1/audio/transcriptions`. The bundled `faster-whisper` service
 uses the OpenAI-compatible `fedirz/faster-whisper-server` image.
+Keep this separate from `TRANSCRIPTION_SOURCE_MODE`: source mode chooses how
+ClutchCam cuts audio into provider requests (`chunked` fixed windows or the
+optional `vad-utterance` speech-pause windows), while request mode chooses the
+HTTP upload/API shape sent to the provider.
 
 The OBS buffered media-source adapter is implemented behind the switcher
 boundary. It updates a known OBS Media Source from a resolved clip URI before
@@ -167,11 +171,66 @@ Run the orchestrator with live transcription and dry-run OBS after
 ```bash
 DRY_RUN_OBS=true \
 LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPTION_SOURCE_MODE=chunked \
 TRANSCRIPT_LOG_TEXT_ENABLED=true \
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
 COMPOSE_PROFILES=local-linux \
 docker compose run --rm orchestrator
 ```
+
+## Compare Transcription Source Modes
+
+Use `TRANSCRIPTION_SOURCE_MODE=chunked` as the default and fallback. FFmpeg
+segments each player feed into fixed WAV chunks, every stable chunk is sent to
+the configured transcription provider, and only final transcript events reach
+the local prefilter, AI director, scheduler, and switcher path. Optional
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS` can reduce missed phrases at fixed
+chunk boundaries when the provider returns timestamped segments.
+
+Use `TRANSCRIPTION_SOURCE_MODE=vad-utterance` only for comparison runs. FFmpeg
+still normalizes each stream before VAD, so keep these extraction settings:
+
+```text
+AUDIO_EXTRACT_CONTAINER=wav
+AUDIO_EXTRACT_CODEC=pcm_s16le
+AUDIO_EXTRACT_CHANNELS=1
+TRANSCRIPTION_SOURCE_MODE=vad-utterance
+```
+
+VAD groups local speech around pauses, writes utterance-sized WAV request files
+under the audio extract directory, and sends those requests through the same
+transcription adapter selected by `TRANSCRIPTION_REQUEST_MODE`. Provider
+responses still normalize to `TranscriptEvent`, and final events still flow
+through `TranscriptRouter`; VAD windows do not bypass duplicate-trigger
+protection or the AI decision path.
+
+Compare both modes against the same fixture, scrimmage, or rehearsal stream:
+
+```bash
+DRY_RUN_OBS=true \
+LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPTION_SOURCE_MODE=chunked \
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
+COMPOSE_PROFILES=local-linux \
+docker compose run --rm orchestrator
+
+DRY_RUN_OBS=true \
+LIVE_TRANSCRIPTION_ENABLED=true \
+TRANSCRIPTION_SOURCE_MODE=vad-utterance \
+AUDIO_EXTRACT_CONTAINER=wav \
+AUDIO_EXTRACT_CODEC=pcm_s16le \
+AUDIO_EXTRACT_CHANNELS=1 \
+TRANSCRIPTION_API_URL=http://host.docker.internal:8000 \
+COMPOSE_PROFILES=local-linux \
+docker compose run --rm orchestrator
+```
+
+For each run, record missed trigger phrases, duplicate triggers, latency from
+speech end to accepted transcript event, host CPU/GPU use, transcription
+backend request count and duration, and backend cost when the provider is
+remote or metered. Keep `TRANSCRIPT_LOG_TEXT_ENABLED=false` during normal
+runs; enable it only for explicit quality evaluation when everyone involved
+expects speech to appear in logs.
 
 Start the standalone transcription worker in the default JSON-reference mode
 only when `TRANSCRIPTION_API_URL` points at a reachable service or adapter
@@ -204,6 +263,14 @@ TRANSCRIPTION_RESPONSE_FORMAT=json \
 COMPOSE_PROFILES=media-server,transcription-worker,local-transcription \
 docker compose up -d --build transcription-worker faster-whisper
 ```
+
+The standalone worker emits JSONL `transcript_event` and
+`transcription_failure` records with `transcription_source_mode` and
+`transcription_request_mode` fields when built from runtime config. Use those
+fields, event timestamps, final-event counts, and failure counts to compare
+`chunked` and `vad-utterance`. This diagnostic path includes transcript text in
+event records; use the integrated orchestrator with
+`TRANSCRIPT_LOG_TEXT_ENABLED=false` when transcript text must stay out of logs.
 
 Direct upload check:
 
@@ -500,6 +567,10 @@ Unavailable transcription service:
   writable, and set `TRANSCRIPTION_REQUEST_MODE=openai-compatible` for worker
   uploads to `/v1/audio/transcriptions`. Use `/transcribe` only with a service
   or adapter that exposes ClutchCam's JSON-reference contract.
+- If `TRANSCRIPTION_SOURCE_MODE=vad-utterance` fails at startup, first confirm
+  `AUDIO_EXTRACT_CONTAINER=wav`, `AUDIO_EXTRACT_CODEC=pcm_s16le`, and
+  `AUDIO_EXTRACT_CHANNELS=1`. Set `TRANSCRIPTION_SOURCE_MODE=chunked` to return
+  to fixed chunks while debugging VAD settings.
 
 Unavailable AI endpoint:
 
