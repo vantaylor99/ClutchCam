@@ -47,7 +47,7 @@ export function codex(instructionFile, _prompt, { cwd, stage, difficulty } = {})
 		'exec',
 		'--json',
 		'--color', 'never',
-		'--full-auto',
+		'--dangerously-bypass-approvals-and-sandbox',
 		'--ephemeral',
 		'--ignore-user-config',
 		'-C', cwd,
