@@ -6,6 +6,8 @@ import json
 import signal
 import sys
 import threading
+import wave
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -16,6 +18,7 @@ from urllib.request import url2pathname
 from config import (
     AppConfig,
     TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
     get_config,
 )
 from contracts import TranscriptEvent
@@ -40,12 +43,64 @@ from services.transcription_runtime import (
 
 
 POLL_INTERVAL_SECONDS = 0.5
+PCM_S16_MAX = 32768.0
 
 
 @dataclass(frozen=True)
 class _ChunkSnapshot:
     size_bytes: int
     modified_ns: int
+
+
+@dataclass(frozen=True)
+class VadUtteranceConfig:
+    frame_seconds: float = 0.03
+    energy_threshold: float = 0.015
+    min_speech_seconds: float = 0.18
+    min_silence_seconds: float = 0.45
+    leading_padding_seconds: float = 0.18
+    trailing_padding_seconds: float = 0.24
+    max_utterance_seconds: float = 12.0
+
+    @classmethod
+    def from_app_config(cls, app_config: AppConfig) -> "VadUtteranceConfig":
+        return cls(
+            frame_seconds=app_config.transcription_vad_frame_ms / 1000.0,
+            energy_threshold=app_config.transcription_vad_energy_threshold,
+            min_speech_seconds=app_config.transcription_vad_min_speech_seconds,
+            min_silence_seconds=app_config.transcription_vad_min_silence_seconds,
+            leading_padding_seconds=(
+                app_config.transcription_vad_leading_padding_seconds
+            ),
+            trailing_padding_seconds=(
+                app_config.transcription_vad_trailing_padding_seconds
+            ),
+            max_utterance_seconds=app_config.transcription_vad_max_utterance_seconds,
+        )
+
+
+@dataclass(frozen=True)
+class _PcmFrame:
+    start_seconds: float
+    data: bytes
+    frame_count: int
+    sample_rate_hz: int
+    is_speech: bool
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.frame_count / self.sample_rate_hz
+
+
+class _VadStreamState:
+    def __init__(self) -> None:
+        self.leading_frames: deque[_PcmFrame] = deque()
+        self.active = False
+        self.start_seconds = 0.0
+        self.frames: list[_PcmFrame] = []
+        self.silence_frames: list[_PcmFrame] = []
+        self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
 
 
 class AudioChunkDiscovery:
@@ -217,6 +272,278 @@ class OverlappedAudioWindowDiscovery:
                 continue
 
 
+class VadUtteranceAudioWindowDiscovery:
+    """Assembles speech-sized WAV request windows from completed WAV chunks."""
+
+    def __init__(
+        self,
+        base_discovery: AudioChunkDiscovery,
+        *,
+        extraction_config: AudioExtractionConfig,
+        vad_config: VadUtteranceConfig,
+        logger=None,
+    ) -> None:
+        self.base_discovery = base_discovery
+        self.extraction_config = extraction_config
+        self.vad_config = vad_config
+        self._logger = logger
+        self._states = {
+            stream_id: _VadStreamState()
+            for stream_id in extraction_config.stream_ids
+        }
+        self._sequence_by_stream = {
+            stream_id: 0
+            for stream_id in extraction_config.stream_ids
+        }
+        self._retained_request_paths: set[Path] = set()
+        self._validate_extraction_config()
+
+    def discover(self) -> tuple[AudioInputRef, ...]:
+        refs: list[AudioInputRef] = []
+        current_request_paths: set[Path] = set()
+        for chunk_ref in self.base_discovery.discover():
+            for utterance_ref in self._process_chunk(chunk_ref):
+                refs.append(utterance_ref)
+                current_request_paths.add(_local_file_path_from_uri(utterance_ref.uri))
+
+        self._cleanup_stale_request_paths(current_request_paths)
+        self._retained_request_paths = current_request_paths
+        return tuple(refs)
+
+    def _validate_extraction_config(self) -> None:
+        if self.extraction_config.container.strip().lower() != "wav":
+            raise TranscriptionError(
+                "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
+                "AUDIO_EXTRACT_CONTAINER=wav."
+            )
+        if self.extraction_config.channels != 1:
+            raise TranscriptionError(
+                "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
+                "AUDIO_EXTRACT_CHANNELS=1."
+            )
+        if self.extraction_config.codec.strip().lower() != "pcm_s16le":
+            raise TranscriptionError(
+                "TRANSCRIPTION_SOURCE_MODE=vad-utterance requires "
+                "AUDIO_EXTRACT_CODEC=pcm_s16le."
+            )
+
+    def _process_chunk(self, chunk_ref: AudioInputRef) -> tuple[AudioInputRef, ...]:
+        if chunk_ref.starts_at_seconds is None:
+            return ()
+        chunk_path = _local_file_path_from_uri(chunk_ref.uri)
+        try:
+            frames, sample_rate = self._read_chunk_frames(chunk_path, chunk_ref)
+        except TranscriptionError as exc:
+            if self._logger is not None:
+                self._logger.warning(
+                    "transcription_vad_chunk_skipped stream=%s chunk=%s error=%r",
+                    chunk_ref.stream_id,
+                    chunk_path,
+                    str(exc),
+                )
+            return ()
+
+        output_refs: list[AudioInputRef] = []
+        state = self._states[chunk_ref.stream_id]
+        for frame in frames:
+            finalized = self._process_frame(state, frame)
+            if finalized is not None:
+                output_refs.append(
+                    self._write_utterance_ref(
+                        chunk_ref.stream_id,
+                        finalized,
+                        sample_rate,
+                    )
+                )
+        return tuple(output_refs)
+
+    def _read_chunk_frames(
+        self,
+        chunk_path: Path,
+        chunk_ref: AudioInputRef,
+    ) -> tuple[tuple[_PcmFrame, ...], int]:
+        try:
+            with wave.open(str(chunk_path), "rb") as wav_file:
+                channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                sample_rate = wav_file.getframerate()
+                compression = wav_file.getcomptype()
+                frame_count = wav_file.getnframes()
+                data = wav_file.readframes(frame_count)
+        except (EOFError, OSError, wave.Error) as exc:
+            raise TranscriptionError(f"Unreadable VAD WAV chunk: {exc}") from exc
+
+        if channels != 1 or sample_width != 2 or compression != "NONE":
+            raise TranscriptionError(
+                "VAD chunks must be uncompressed mono 16-bit PCM WAV files."
+            )
+        expected_rate = self.extraction_config.sample_rate_hz
+        if sample_rate != expected_rate:
+            raise TranscriptionError(
+                f"VAD chunk sample rate {sample_rate} does not match "
+                f"AUDIO_EXTRACT_SAMPLE_RATE={expected_rate}."
+            )
+
+        samples_per_frame = max(
+            1,
+            int(round(self.vad_config.frame_seconds * sample_rate)),
+        )
+        bytes_per_frame = samples_per_frame * sample_width
+        frames: list[_PcmFrame] = []
+        offset = 0
+        while offset < len(data):
+            frame_data = data[offset : offset + bytes_per_frame]
+            if len(frame_data) < sample_width:
+                break
+            frame_samples = len(frame_data) // sample_width
+            start_seconds = (
+                float(chunk_ref.starts_at_seconds)
+                + (offset // sample_width) / float(sample_rate)
+            )
+            frames.append(
+                _PcmFrame(
+                    start_seconds=start_seconds,
+                    data=frame_data,
+                    frame_count=frame_samples,
+                    sample_rate_hz=sample_rate,
+                    is_speech=(
+                        _pcm_s16_energy(frame_data)
+                        >= self.vad_config.energy_threshold
+                    ),
+                )
+            )
+            offset += bytes_per_frame
+        return tuple(frames), sample_rate
+
+    def _process_frame(
+        self,
+        state: _VadStreamState,
+        frame: _PcmFrame,
+    ) -> tuple[float, bytes, float] | None:
+        if frame.is_speech:
+            if not state.active:
+                leading = tuple(state.leading_frames)
+                state.active = True
+                state.leading_frames.clear()
+                state.start_seconds = (
+                    leading[0].start_seconds if leading else frame.start_seconds
+                )
+                state.frames = list(leading)
+                state.silence_frames = []
+                state.speech_seconds = 0.0
+                state.silence_seconds = 0.0
+            elif state.silence_frames:
+                state.frames.extend(state.silence_frames)
+                state.silence_frames = []
+                state.silence_seconds = 0.0
+
+            state.frames.append(frame)
+            state.speech_seconds += frame.duration_seconds
+        elif state.active:
+            state.silence_frames.append(frame)
+            state.silence_seconds += frame.duration_seconds
+
+        if not state.active:
+            self._push_leading_frame(state, frame)
+            return None
+
+        current_end = frame.start_seconds + frame.duration_seconds
+        if current_end - state.start_seconds >= self.vad_config.max_utterance_seconds:
+            return self._finalize_active(state, include_trailing=False)
+
+        if state.silence_seconds >= self.vad_config.min_silence_seconds:
+            if state.speech_seconds >= self.vad_config.min_speech_seconds:
+                finalized = self._finalize_active(state, include_trailing=True)
+                self._push_leading_frame(state, frame)
+                return finalized
+            self._discard_active(state)
+            self._push_leading_frame(state, frame)
+        return None
+
+    def _push_leading_frame(self, state: _VadStreamState, frame: _PcmFrame) -> None:
+        state.leading_frames.append(frame)
+        retained_seconds = sum(item.duration_seconds for item in state.leading_frames)
+        while (
+            state.leading_frames
+            and retained_seconds > self.vad_config.leading_padding_seconds
+        ):
+            removed = state.leading_frames.popleft()
+            retained_seconds -= removed.duration_seconds
+
+    def _finalize_active(
+        self,
+        state: _VadStreamState,
+        *,
+        include_trailing: bool,
+    ) -> tuple[float, bytes, float] | None:
+        frames = list(state.frames)
+        if include_trailing:
+            frames.extend(self._trailing_frames(state.silence_frames))
+        if not frames:
+            self._discard_active(state)
+            return None
+        start_seconds = state.start_seconds
+        data = b"".join(frame.data for frame in frames)
+        duration = sum(frame.duration_seconds for frame in frames)
+        self._discard_active(state)
+        return start_seconds, data, duration
+
+    def _trailing_frames(self, frames: list[_PcmFrame]) -> tuple[_PcmFrame, ...]:
+        retained: list[_PcmFrame] = []
+        retained_seconds = 0.0
+        for frame in frames:
+            if retained_seconds >= self.vad_config.trailing_padding_seconds:
+                break
+            retained.append(frame)
+            retained_seconds += frame.duration_seconds
+        return tuple(retained)
+
+    def _discard_active(self, state: _VadStreamState) -> None:
+        state.active = False
+        state.frames = []
+        state.silence_frames = []
+        state.speech_seconds = 0.0
+        state.silence_seconds = 0.0
+
+    def _write_utterance_ref(
+        self,
+        stream_id: str,
+        finalized: tuple[float, bytes, float],
+        sample_rate: int,
+    ) -> AudioInputRef:
+        start_seconds, data, duration = finalized
+        sequence = self._sequence_by_stream[stream_id]
+        self._sequence_by_stream[stream_id] = sequence + 1
+        start_ms = max(0, int(round(start_seconds * 1000)))
+        output_dir = self.extraction_config.output_dir / "_vad" / stream_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{start_ms:012d}-{sequence:06d}.wav"
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(data)
+
+        return AudioInputRef(
+            stream_id=stream_id,
+            uri=output_path.resolve().as_uri(),
+            starts_at_seconds=start_seconds,
+            duration_seconds=duration,
+            codec=self.extraction_config.codec,
+            sample_rate_hz=sample_rate,
+            channels=1,
+            emit_from_seconds=start_seconds,
+        )
+
+    def _cleanup_stale_request_paths(self, current_request_paths: set[Path]) -> None:
+        stale_paths = self._retained_request_paths.difference(current_request_paths)
+        for stale_path in stale_paths:
+            try:
+                stale_path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
 class TranscriptionWorker:
     """Owns extractor lifecycle and feeds discovered chunks into the pump."""
 
@@ -235,6 +562,8 @@ class TranscriptionWorker:
         poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
         wait: Callable[[float], bool] | None = None,
         fail_fast: bool = False,
+        final_events_only: bool = False,
+        suppress_non_newer_final_events: bool = False,
     ) -> None:
         self.extraction_config = extraction_config
         self.extractor = extractor
@@ -253,6 +582,8 @@ class TranscriptionWorker:
             transcriber=transcriber,
             sink=sink,
             fail_fast=fail_fast,
+            final_events_only=final_events_only,
+            suppress_non_newer_final_events=suppress_non_newer_final_events,
         )
 
     def run_once(self) -> TranscriptionRuntimeSummary:
@@ -342,9 +673,7 @@ def build_worker(
         fail_fast=fail_fast,
     )
     if not isinstance(source, TranscriptionWorker):
-        raise TranscriptionError(
-            "build_worker requires the chunked transcription source."
-        )
+        raise TranscriptionError("build_worker requires a worker transcription source.")
     return source
 
 
@@ -361,11 +690,13 @@ def build_transcription_event_source(
     fail_fast: bool = False,
 ) -> TranscriptEventSource:
     app_config = app_config or get_config()
-    if app_config.transcription_source_mode != TRANSCRIPTION_SOURCE_MODE_CHUNKED:
+    if app_config.transcription_source_mode not in (
+        TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+        TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+    ):
         raise TranscriptionError(
             "Unsupported TRANSCRIPTION_SOURCE_MODE "
-            f"{app_config.transcription_source_mode!r}: this runtime only "
-            f"implements {TRANSCRIPTION_SOURCE_MODE_CHUNKED!r}."
+            f"{app_config.transcription_source_mode!r}."
         )
 
     extraction_config = AudioExtractionConfig.from_app_config(app_config)
@@ -376,7 +707,17 @@ def build_transcription_event_source(
         extraction_config,
         extractor,
     )
-    if app_config.transcription_request_overlap_seconds > 0:
+    final_events_only = False
+    suppress_non_newer_final_events = False
+    if app_config.transcription_source_mode == TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE:
+        discovery = VadUtteranceAudioWindowDiscovery(
+            discovery,
+            extraction_config=extraction_config,
+            vad_config=VadUtteranceConfig.from_app_config(app_config),
+        )
+        final_events_only = True
+        suppress_non_newer_final_events = True
+    elif app_config.transcription_request_overlap_seconds > 0:
         discovery = OverlappedAudioWindowDiscovery(
             discovery,
             config=extraction_config,
@@ -395,6 +736,8 @@ def build_transcription_event_source(
         poll_interval_seconds=poll_interval_seconds,
         fail_fast=fail_fast,
         discovery=discovery,
+        final_events_only=final_events_only,
+        suppress_non_newer_final_events=suppress_non_newer_final_events,
     )
 
 
@@ -462,6 +805,17 @@ def _local_file_path_from_uri(uri: str) -> Path:
     if not parsed.scheme or windows_drive_path:
         return Path(uri).resolve()
     raise ValueError(f"Audio chunk URI is not local: {uri}")
+
+
+def _pcm_s16_energy(data: bytes) -> float:
+    sample_count = len(data) // 2
+    if sample_count <= 0:
+        return 0.0
+    total = 0.0
+    for index in range(0, sample_count * 2, 2):
+        sample = int.from_bytes(data[index : index + 2], "little", signed=True)
+        total += sample * sample
+    return (total / sample_count) ** 0.5 / PCM_S16_MAX
 
 
 def _numeric_previous_chunk_path(current_path: Path) -> Path | None:

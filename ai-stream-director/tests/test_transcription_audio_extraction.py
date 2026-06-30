@@ -101,6 +101,13 @@ class AudioExtractionConfigTests(unittest.TestCase):
         self.assertEqual(config.audio_extract_codec, "pcm_s16le")
         self.assertEqual(config.audio_extract_container, "wav")
         self.assertEqual(config.transcription_request_overlap_seconds, 0.0)
+        self.assertEqual(config.transcription_vad_frame_ms, 30)
+        self.assertEqual(config.transcription_vad_energy_threshold, 0.015)
+        self.assertEqual(config.transcription_vad_min_speech_seconds, 0.18)
+        self.assertEqual(config.transcription_vad_min_silence_seconds, 0.45)
+        self.assertEqual(config.transcription_vad_leading_padding_seconds, 0.18)
+        self.assertEqual(config.transcription_vad_trailing_padding_seconds, 0.24)
+        self.assertEqual(config.transcription_vad_max_utterance_seconds, 12.0)
         self.assertEqual(
             config.audio_input_urls["player_1"],
             "rtmp://localhost/live/player_1",

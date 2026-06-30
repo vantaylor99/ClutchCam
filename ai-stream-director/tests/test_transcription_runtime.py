@@ -264,6 +264,63 @@ class TranscriptionRuntimePumpTests(unittest.TestCase):
         self.assertEqual(summary.failed_audio_refs, 1)
         self.assertIn("returned None", summary.failures[0].message)
 
+    def test_final_only_mode_rejects_provider_partials(self) -> None:
+        partial = TranscriptEvent(
+            stream_id="player_1",
+            text="still talking",
+            start_time_seconds=1.0,
+            end_time_seconds=2.0,
+            is_final=False,
+        )
+        sink_calls: list[TranscriptEvent] = []
+
+        summary = TranscriptionRuntimePump(
+            transcriber=FakeTranscriber([[partial]]),
+            sink=sink_calls.append,
+            final_events_only=True,
+        ).run_once([audio_ref("player_1")])
+
+        self.assertEqual(summary.emitted_transcript_events, 1)
+        self.assertEqual(summary.accepted_events, 0)
+        self.assertEqual(summary.rejected_events, 1)
+        self.assertEqual(sink_calls, [])
+
+    def test_non_newer_final_suppression_uses_timestamps_not_text(self) -> None:
+        first = TranscriptEvent(
+            stream_id="player_1",
+            text="same phrase",
+            start_time_seconds=1.0,
+            end_time_seconds=2.0,
+        )
+        repeated_old = TranscriptEvent(
+            stream_id="player_1",
+            text="same phrase",
+            start_time_seconds=1.0,
+            end_time_seconds=2.0,
+        )
+        repeated_new = TranscriptEvent(
+            stream_id="player_1",
+            text="same phrase",
+            start_time_seconds=3.0,
+            end_time_seconds=4.0,
+        )
+        sink_calls: list[TranscriptEvent] = []
+
+        pump = TranscriptionRuntimePump(
+            transcriber=FakeTranscriber([[first], [repeated_old], [repeated_new]]),
+            sink=lambda event: sink_calls.append(event) or event,
+            suppress_non_newer_final_events=True,
+        )
+        first_summary = pump.run_once([audio_ref("player_1")])
+        old_summary = pump.run_once([audio_ref("player_1")])
+        new_summary = pump.run_once([audio_ref("player_1")])
+
+        self.assertEqual(first_summary.accepted_events, 1)
+        self.assertEqual(old_summary.accepted_events, 0)
+        self.assertEqual(old_summary.rejected_events, 1)
+        self.assertEqual(new_summary.accepted_events, 1)
+        self.assertEqual(sink_calls, [first, repeated_new])
+
 
 if __name__ == "__main__":
     unittest.main()

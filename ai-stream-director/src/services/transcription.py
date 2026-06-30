@@ -880,7 +880,11 @@ def _events_from_payload(
                 audio.stream_id,
                 offset,
                 duration_seconds=audio.duration_seconds,
-                require_timestamps=audio.emit_from_seconds is not None,
+                require_timestamps=(
+                    audio.emit_from_seconds is not None
+                    and audio.starts_at_seconds is not None
+                    and audio.emit_from_seconds > audio.starts_at_seconds
+                ),
             )
         )
 

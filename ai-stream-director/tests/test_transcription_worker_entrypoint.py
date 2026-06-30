@@ -27,6 +27,8 @@ from transcription_worker import (  # noqa: E402
     OverlappedAudioWindowDiscovery,
     SignalStopController,
     TranscriptionWorker,
+    VadUtteranceAudioWindowDiscovery,
+    VadUtteranceConfig,
     build_transcription_event_source,
     build_worker,
 )
@@ -154,7 +156,7 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertIsInstance(worker.discovery, OverlappedAudioWindowDiscovery)
         self.assertEqual(worker.discovery.overlap_seconds, 1.0)
 
-    def test_build_source_rejects_reserved_unimplemented_mode(self) -> None:
+    def test_build_source_accepts_vad_utterance_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(
                 os.environ,
@@ -166,11 +168,10 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
             ):
                 config = get_config()
 
-        with self.assertRaisesRegex(
-            TranscriptionError,
-            "Unsupported TRANSCRIPTION_SOURCE_MODE.*vad-utterance",
-        ):
-            build_transcription_event_source(app_config=config)
+        source = build_transcription_event_source(app_config=config)
+
+        self.assertIsInstance(source, TranscriptionWorker)
+        self.assertIsInstance(source.discovery, VadUtteranceAudioWindowDiscovery)
 
     def test_chunked_source_start_and_stop_wrap_worker_lifecycle(self) -> None:
         stop_event = threading.Event()
@@ -417,12 +418,139 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(extractor.starts, 1)
         self.assertEqual(extractor.stops, 1)
 
+
+class VadUtteranceAudioWindowDiscoveryTests(unittest.TestCase):
+    def test_silence_only_input_does_not_emit_provider_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(chunk, [0] * 20, framerate=10)
+            discovery = self._discovery(root, (self._ref(chunk, 0.0),))
+
+            refs = discovery.discover()
+
+        self.assertEqual(refs, ())
+
+    def test_trailing_silence_finalizes_speech_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(
+                chunk,
+                [0, 0, 10000, 10000, 10000, 0, 0, 0],
+                framerate=10,
+            )
+            discovery = self._discovery(root, (self._ref(chunk, 0.0),))
+
+            refs = discovery.discover()
+
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0].starts_at_seconds, 0.1)
+            self.assertAlmostEqual(refs[0].duration_seconds, 0.6)
+            self.assertEqual(refs[0].sample_rate_hz, 10)
+            self.assertEqual(refs[0].channels, 1)
+            self.assertIn("/_vad/player_1/", refs[0].uri.replace("\\", "/"))
+            output_path = next((root / "_vad" / "player_1").glob("*.wav"))
+            with wave.open(str(output_path), "rb") as wav_file:
+                self.assertEqual(wav_file.getnframes(), 6)
+
+    def test_long_speech_finalizes_at_max_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(chunk, [12000] * 10, framerate=10)
+            discovery = self._discovery(
+                root,
+                (self._ref(chunk, 0.0),),
+                vad_config=VadUtteranceConfig(
+                    frame_seconds=0.1,
+                    energy_threshold=0.01,
+                    min_speech_seconds=0.1,
+                    min_silence_seconds=0.2,
+                    leading_padding_seconds=0,
+                    trailing_padding_seconds=0,
+                    max_utterance_seconds=0.5,
+                ),
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 2)
+        self.assertEqual([ref.duration_seconds for ref in refs], [0.5, 0.5])
+
+    def test_unreadable_or_incompatible_wav_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bad = root / "000000000.wav"
+            good = root / "000000001.wav"
+            bad.write_bytes(b"not wav")
+            _write_pcm_wav(good, [12000, 12000, 0, 0], framerate=10)
+            discovery = self._discovery(
+                root,
+                (self._ref(bad, 0.0), self._ref(good, 0.4)),
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+
+    def _discovery(
+        self,
+        root: Path,
+        refs: tuple[AudioInputRef, ...],
+        *,
+        vad_config: VadUtteranceConfig | None = None,
+    ) -> VadUtteranceAudioWindowDiscovery:
+        extraction_config = AudioExtractionConfig(
+            output_dir=root,
+            stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+            stream_ids=("player_1",),
+            sample_rate_hz=10,
+            chunk_duration_seconds=1,
+        )
+        return VadUtteranceAudioWindowDiscovery(
+            FakeDiscovery(refs),
+            extraction_config=extraction_config,
+            vad_config=vad_config
+            or VadUtteranceConfig(
+                frame_seconds=0.1,
+                energy_threshold=0.01,
+                min_speech_seconds=0.2,
+                min_silence_seconds=0.2,
+                leading_padding_seconds=0.1,
+                trailing_padding_seconds=0.2,
+                max_utterance_seconds=1.0,
+            ),
+        )
+
+    def _ref(self, path: Path, starts_at_seconds: float) -> AudioInputRef:
+        return AudioInputRef(
+            stream_id="player_1",
+            uri=path.resolve().as_uri(),
+            starts_at_seconds=starts_at_seconds,
+            duration_seconds=1.0,
+            codec="pcm_s16le",
+            sample_rate_hz=10,
+            channels=1,
+        )
+
 def _write_wav(path: Path, *, frame_count: int, framerate: int = 8000) -> None:
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(framerate)
         wav_file.writeframes(b"\x00\x00" * frame_count)
+
+
+def _write_pcm_wav(path: Path, samples: list[int], *, framerate: int) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(
+            b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+        )
 
 
 if __name__ == "__main__":

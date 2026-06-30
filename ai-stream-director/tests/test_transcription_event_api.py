@@ -268,6 +268,35 @@ class FasterWhisperTranscriberTests(unittest.TestCase):
                 )
             )
 
+    def test_text_response_without_timestamps_uses_duration_for_vad_window(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            post=lambda *args, **kwargs: FakeResponse({"text": "new callout"}),
+        )
+
+        events = transcriber.transcribe(
+            AudioInputRef(
+                stream_id="player_2",
+                uri="file:///tmp/player_2-vad.wav",
+                starts_at_seconds=40.0,
+                duration_seconds=3.5,
+                emit_from_seconds=40.0,
+            )
+        )
+
+        self.assertEqual(
+            events,
+            (
+                TranscriptEvent(
+                    stream_id="player_2",
+                    text="new callout",
+                    start_time_seconds=40.0,
+                    end_time_seconds=43.5,
+                    is_final=True,
+                ),
+            ),
+        )
+
     def test_openai_compatible_verbose_segments_preserve_chunk_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_path = Path(tmpdir) / "chunk.wav"

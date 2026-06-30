@@ -89,6 +89,13 @@ class AppConfig:
     transcription_response_format: str
     transcription_request_timeout_seconds: float
     transcription_request_overlap_seconds: float
+    transcription_vad_frame_ms: int
+    transcription_vad_energy_threshold: float
+    transcription_vad_min_speech_seconds: float
+    transcription_vad_min_silence_seconds: float
+    transcription_vad_leading_padding_seconds: float
+    transcription_vad_trailing_padding_seconds: float
+    transcription_vad_max_utterance_seconds: float
     live_transcription_enabled: bool
     live_transcription_queue_size: int
     transcript_log_text_enabled: bool
@@ -178,6 +185,31 @@ def get_config() -> AppConfig:
         transcription_request_overlap_seconds=_env_float(
             "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
             "0",
+        ),
+        transcription_vad_frame_ms=_env_int("TRANSCRIPTION_VAD_FRAME_MS", "30"),
+        transcription_vad_energy_threshold=_env_float(
+            "TRANSCRIPTION_VAD_ENERGY_THRESHOLD",
+            "0.015",
+        ),
+        transcription_vad_min_speech_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS",
+            "0.18",
+        ),
+        transcription_vad_min_silence_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS",
+            "0.45",
+        ),
+        transcription_vad_leading_padding_seconds=_env_float(
+            "TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS",
+            "0.18",
+        ),
+        transcription_vad_trailing_padding_seconds=_env_float(
+            "TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS",
+            "0.24",
+        ),
+        transcription_vad_max_utterance_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS",
+            "12",
         ),
         live_transcription_enabled=_parse_bool(
             os.getenv("LIVE_TRANSCRIPTION_ENABLED", "false")
@@ -345,6 +377,39 @@ def validate_config(config: AppConfig) -> None:
         "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
         config.transcription_request_overlap_seconds,
     )
+    _require_positive_int("TRANSCRIPTION_VAD_FRAME_MS", config.transcription_vad_frame_ms)
+    _validate_unit_interval(
+        "TRANSCRIPTION_VAD_ENERGY_THRESHOLD",
+        config.transcription_vad_energy_threshold,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS",
+        config.transcription_vad_min_speech_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS",
+        config.transcription_vad_min_silence_seconds,
+    )
+    _require_non_negative(
+        "TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS",
+        config.transcription_vad_leading_padding_seconds,
+    )
+    _require_non_negative(
+        "TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS",
+        config.transcription_vad_trailing_padding_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS",
+        config.transcription_vad_max_utterance_seconds,
+    )
+    if (
+        config.transcription_vad_min_speech_seconds
+        > config.transcription_vad_max_utterance_seconds
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS cannot exceed "
+            "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS."
+        )
     _require_positive_int(
         "LIVE_TRANSCRIPTION_QUEUE_SIZE",
         config.live_transcription_queue_size,
