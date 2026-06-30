@@ -547,6 +547,27 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertEqual(worker.start_calls, 1)
         self.assertEqual(worker.stop_calls, 1)
 
+    def test_live_transcription_source_does_not_treat_start_attribute_error_as_legacy_worker(self) -> None:
+        output = io.StringIO()
+        worker = FakeBrokenStartSource()
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            startup_timeout_seconds=0.1,
+            log=lambda message: print(message, file=output),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Live transcription source failed to start",
+        ):
+            source.start()
+
+        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(worker.run_forever_calls, 0)
+        self.assertEqual(worker.stop_calls, 1)
+        self.assertIn("source missing field", output.getvalue())
+
     def test_accepted_ai_decision_resolves_buffered_switch_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_switcher = BufferBackedSwitcher(
@@ -677,6 +698,25 @@ class FakeTranscriptEventSource:
     def stop(self) -> None:
         self.stop_calls += 1
         self.stop_event.set()
+
+
+class FakeBrokenStartSource:
+    def __init__(self) -> None:
+        self.stop_event = threading.Event()
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.run_forever_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+        raise AttributeError("source missing field")
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.stop_event.set()
+
+    def run_forever(self) -> None:
+        self.run_forever_calls += 1
 
 
 class FakeLoopScheduler:

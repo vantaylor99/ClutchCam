@@ -195,9 +195,10 @@ class LiveTranscriptionSource:
                 return
 
             self._stop_requested = True
-            try:
-                self.worker.stop()
-            except AttributeError:
+            stop = getattr(self.worker, "stop", None)
+            if callable(stop):
+                stop()
+            else:
                 self.worker.stop_event.set()
             thread = self._thread
 
@@ -209,9 +210,10 @@ class LiveTranscriptionSource:
 
     def _run(self) -> None:
         try:
-            try:
-                self.worker.start()
-            except AttributeError:
+            start = getattr(self.worker, "start", None)
+            if callable(start):
+                start()
+            else:
                 self.worker.run_forever()
         except Exception as exc:
             self._startup_error = exc

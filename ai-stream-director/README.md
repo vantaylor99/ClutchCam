@@ -404,6 +404,7 @@ TRANSCRIPTION_API_URL=http://host.docker.internal:8000
 TRANSCRIPTION_REQUEST_MODE=json
 # TRANSCRIPTION_REQUEST_MODE=openai-compatible
 # TRANSCRIPTION_ENDPOINT_PATH=/v1/audio/transcriptions
+TRANSCRIPTION_SOURCE_MODE=chunked
 TRANSCRIPTION_MODEL=Systran/faster-whisper-small
 TRANSCRIPTION_LANGUAGE=
 TRANSCRIPTION_RESPONSE_FORMAT=json
@@ -422,6 +423,10 @@ the terminal prompt remains the transcript source.
 For transcript quality evaluation, `TRANSCRIPT_LOG_TEXT_ENABLED=true` logs
 accepted runtime transcript text before prefiltering. Keep it disabled for
 normal runs because player speech can be sensitive.
+`TRANSCRIPTION_SOURCE_MODE=chunked` keeps the current fixed audio chunk
+discovery path. `vad-utterance` is a reserved normalized mode for a future
+voice-activity-detection source and currently fails at startup with a clear
+unsupported-mode error.
 
 ## Standalone Transcription Worker Diagnostics
 
