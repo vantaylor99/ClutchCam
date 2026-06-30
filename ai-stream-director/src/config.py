@@ -71,6 +71,7 @@ class AppConfig:
     transcription_language: str
     transcription_response_format: str
     transcription_request_timeout_seconds: float
+    transcription_request_overlap_seconds: float
     live_transcription_enabled: bool
     live_transcription_queue_size: int
     transcript_log_text_enabled: bool
@@ -150,6 +151,10 @@ def get_config() -> AppConfig:
         transcription_request_timeout_seconds=_env_float(
             "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
             "30",
+        ),
+        transcription_request_overlap_seconds=_env_float(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
+            "0",
         ),
         live_transcription_enabled=_parse_bool(
             os.getenv("LIVE_TRANSCRIPTION_ENABLED", "false")
@@ -300,6 +305,10 @@ def validate_config(config: AppConfig) -> None:
         "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
         config.transcription_request_timeout_seconds,
     )
+    _require_non_negative(
+        "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
+        config.transcription_request_overlap_seconds,
+    )
     _require_positive_int(
         "LIVE_TRANSCRIPTION_QUEUE_SIZE",
         config.live_transcription_queue_size,
@@ -325,6 +334,22 @@ def validate_config(config: AppConfig) -> None:
     _require_positive("AUDIO_EXTRACT_CHUNK_SECONDS", config.audio_extract_chunk_seconds)
     _require_text("AUDIO_EXTRACT_CODEC", config.audio_extract_codec)
     _require_text("AUDIO_EXTRACT_CONTAINER", config.audio_extract_container)
+    if (
+        config.transcription_request_overlap_seconds
+        >= config.audio_extract_chunk_seconds
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS must be less than "
+            "AUDIO_EXTRACT_CHUNK_SECONDS."
+        )
+    if (
+        config.transcription_request_overlap_seconds > 0
+        and config.audio_extract_container.strip().lower() != "wav"
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS requires "
+            "AUDIO_EXTRACT_CONTAINER=wav."
+        )
     _validate_unit_interval("CONFIDENCE_THRESHOLD", config.confidence_threshold)
     _require_non_negative_int(
         "MIN_SWITCH_INTERVAL_SECONDS",

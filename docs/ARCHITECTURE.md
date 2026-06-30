@@ -76,7 +76,8 @@ Production defaults remain environment-driven through `config.py`, including
 `TRANSCRIPTION_REQUEST_MODE`, `TRANSCRIPTION_ENDPOINT_PATH`,
 `TRANSCRIPTION_MODEL`, `TRANSCRIPTION_LANGUAGE`,
 `TRANSCRIPTION_RESPONSE_FORMAT`, `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`,
-`LIVE_TRANSCRIPTION_ENABLED`, `LIVE_TRANSCRIPTION_QUEUE_SIZE`,
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS`, `LIVE_TRANSCRIPTION_ENABLED`,
+`LIVE_TRANSCRIPTION_QUEUE_SIZE`,
 `TRANSCRIPT_LOG_TEXT_ENABLED`, `TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS`,
 `GEMMA_API_URL`, `GEMMA_MODEL`, optional `GEMMA_API_KEY`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
@@ -153,6 +154,12 @@ when `TRANSCRIPTION_REQUEST_MODE=openai-compatible`. It normalizes common text
 and segment response shapes, shifts chunk-relative timestamps, uses audio chunk
 duration when text-only responses omit segment timestamps, and emits
 `TranscriptEvent` objects.
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS` can opt each request after a stream's
+first chunk into a local WAV window containing the previous chunk tail plus the
+current chunk. The worker keeps transcript timestamps on the media timeline and
+drops events that end entirely before the current chunk start; overlap requires
+timestamped segment responses so text-only responses do not duplicate the
+previous chunk tail.
 
 The integrated local Linux path keeps one transcription owner. When
 `LIVE_TRANSCRIPTION_ENABLED=true`, the orchestrator starts an in-process
@@ -281,6 +288,7 @@ cloud GPU inference should all be selected by environment variables:
 - `TRANSCRIPTION_LANGUAGE`
 - `TRANSCRIPTION_RESPONSE_FORMAT`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
+- `TRANSCRIPTION_REQUEST_OVERLAP_SECONDS`
 - `LIVE_TRANSCRIPTION_ENABLED`
 - `LIVE_TRANSCRIPTION_QUEUE_SIZE`
 - `INGEST_API_URL`
@@ -333,6 +341,7 @@ Transcription endpoint examples:
 # Host-local Faster-Whisper-compatible adapter from Compose.
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000
 TRANSCRIPTION_REQUEST_MODE=json
+TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0
 
 # Optional Compose-network OpenAI-compatible transcription service.
 TRANSCRIPTION_API_URL=http://faster-whisper:8000

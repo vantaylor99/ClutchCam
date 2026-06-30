@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from services.transcription import (  # noqa: E402
 from transcription_worker import (  # noqa: E402
     CompletedAudioChunkDiscovery,
     JsonLinesTranscriptSink,
+    OverlappedAudioWindowDiscovery,
     SignalStopController,
     TranscriptionWorker,
     build_worker,
@@ -130,6 +132,25 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(worker.transcriber.model, "local-whisper")
         self.assertEqual(worker.transcriber.response_format, "verbose_json")
         self.assertIs(worker.stop_event, stop_event)
+        self.assertIsInstance(worker.discovery, CompletedAudioChunkDiscovery)
+
+    def test_build_worker_wraps_discovery_when_overlap_is_enabled(self) -> None:
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "AUDIO_EXTRACT_CHUNK_SECONDS": "3",
+                    "AUDIO_EXTRACT_CONTAINER": "wav",
+                    "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "1",
+                },
+                clear=True,
+            ):
+                worker = build_worker(stdout=stream)
+
+        self.assertIsInstance(worker.discovery, OverlappedAudioWindowDiscovery)
+        self.assertEqual(worker.discovery.overlap_seconds, 1.0)
 
     def test_completed_chunk_discovery_deduplicates_processed_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -154,6 +175,91 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(first_ready_pass[0].stream_id, "player_1")
         self.assertEqual(first_ready_pass[0].starts_at_seconds, 10.0)
         self.assertEqual(second_ready_pass, ())
+
+    def test_overlap_discovery_builds_windows_after_first_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stream_dir = root / "player_1"
+            stream_dir.mkdir()
+            first_path = stream_dir / "000000000.wav"
+            second_path = stream_dir / "000000001.wav"
+            _write_wav(first_path, frame_count=8, framerate=4)
+            _write_wav(second_path, frame_count=8, framerate=4)
+            config = AudioExtractionConfig(
+                output_dir=root,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+                chunk_duration_seconds=2,
+            )
+            discovery = OverlappedAudioWindowDiscovery(
+                FakeDiscovery(
+                    (
+                        AudioInputRef(
+                            stream_id="player_1",
+                            uri=first_path.as_uri(),
+                            starts_at_seconds=0.0,
+                            duration_seconds=2.0,
+                        ),
+                        AudioInputRef(
+                            stream_id="player_1",
+                            uri=second_path.as_uri(),
+                            starts_at_seconds=2.0,
+                            duration_seconds=2.0,
+                        ),
+                    )
+                ),
+                config=config,
+                overlap_seconds=0.5,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(refs[0].uri, first_path.as_uri())
+        self.assertNotEqual(refs[1].uri, second_path.as_uri())
+        self.assertEqual(refs[1].starts_at_seconds, 1.5)
+        self.assertEqual(refs[1].duration_seconds, 2.5)
+        self.assertEqual(refs[1].emit_from_seconds, 2.0)
+        self.assertIn("/_overlap/player_1/000000001.wav", refs[1].uri.replace("\\", "/"))
+
+    def test_overlap_discovery_deletes_stale_composed_files_on_later_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stream_dir = root / "player_1"
+            stream_dir.mkdir()
+            first_path = stream_dir / "000000000.wav"
+            second_path = stream_dir / "000000001.wav"
+            _write_wav(first_path, frame_count=8, framerate=4)
+            _write_wav(second_path, frame_count=8, framerate=4)
+            base = FakeDiscovery(
+                (
+                    AudioInputRef(
+                        stream_id="player_1",
+                        uri=second_path.as_uri(),
+                        starts_at_seconds=2.0,
+                        duration_seconds=2.0,
+                    ),
+                )
+            )
+            discovery = OverlappedAudioWindowDiscovery(
+                base,
+                config=AudioExtractionConfig(
+                    output_dir=root,
+                    stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                    stream_ids=("player_1",),
+                    chunk_duration_seconds=2,
+                ),
+                overlap_seconds=0.5,
+            )
+            refs = discovery.discover()
+            overlap_path = root / "_overlap" / "player_1" / "000000001.wav"
+            self.assertTrue(overlap_path.exists())
+
+            base.refs = ()
+            later_refs = discovery.discover()
+
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(later_refs, ())
+            self.assertFalse(overlap_path.exists())
 
     def test_per_chunk_failure_isolation_emits_failure_and_later_event(self) -> None:
         stream = io.StringIO()
@@ -268,6 +374,13 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
 
         self.assertEqual(extractor.starts, 1)
         self.assertEqual(extractor.stops, 1)
+
+def _write_wav(path: Path, *, frame_count: int, framerate: int = 8000) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
 
 
 if __name__ == "__main__":

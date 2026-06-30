@@ -15,8 +15,17 @@ from services.transcription_runtime import (  # noqa: E402
 from transcript_router import TranscriptRouter  # noqa: E402
 
 
-def audio_ref(stream_id: str, uri: str = "file:///tmp/chunk.wav") -> AudioInputRef:
-    return AudioInputRef(stream_id=stream_id, uri=uri)
+def audio_ref(
+    stream_id: str,
+    uri: str = "file:///tmp/chunk.wav",
+    *,
+    emit_from_seconds: float | None = None,
+) -> AudioInputRef:
+    return AudioInputRef(
+        stream_id=stream_id,
+        uri=uri,
+        emit_from_seconds=emit_from_seconds,
+    )
 
 
 class FakeTranscriber:
@@ -90,6 +99,73 @@ class TranscriptionRuntimePumpTests(unittest.TestCase):
         self.assertEqual(summary.rejected_events, 1)
         self.assertEqual(summary.failed_audio_refs, 0)
         self.assertEqual(router.get_recent_messages(), [])
+
+    def test_overlap_only_events_are_rejected_without_calling_sink(self) -> None:
+        sink_calls: list[TranscriptEvent] = []
+        transcriber = FakeTranscriber(
+            [
+                [
+                    TranscriptEvent(
+                        stream_id="player_1",
+                        text="old tail",
+                        start_time_seconds=8.0,
+                        end_time_seconds=10.0,
+                    )
+                ]
+            ]
+        )
+
+        summary = run_transcription_pump(
+            [audio_ref("player_1", emit_from_seconds=10.0)],
+            transcriber,
+            sink_calls.append,
+        )
+
+        self.assertEqual(summary.emitted_transcript_events, 1)
+        self.assertEqual(summary.accepted_events, 0)
+        self.assertEqual(summary.rejected_events, 1)
+        self.assertEqual(summary.failed_audio_refs, 0)
+        self.assertEqual(sink_calls, [])
+
+    def test_boundary_spanning_overlap_events_are_emitted(self) -> None:
+        sink_calls: list[TranscriptEvent] = []
+        event = TranscriptEvent(
+            stream_id="player_2",
+            text="crosses boundary",
+            start_time_seconds=9.75,
+            end_time_seconds=10.25,
+        )
+        transcriber = FakeTranscriber([[event]])
+
+        summary = run_transcription_pump(
+            [audio_ref("player_2", emit_from_seconds=10.0)],
+            transcriber,
+            lambda emitted: sink_calls.append(emitted) or emitted,
+        )
+
+        self.assertEqual(summary.accepted_events, 1)
+        self.assertEqual(summary.rejected_events, 0)
+        self.assertEqual(sink_calls, [event])
+
+    def test_overlap_filter_does_not_apply_to_other_stream_events(self) -> None:
+        sink_calls: list[TranscriptEvent] = []
+        event = TranscriptEvent(
+            stream_id="player_4",
+            text="wrong stream but not filtered here",
+            start_time_seconds=8.0,
+            end_time_seconds=9.0,
+        )
+        transcriber = FakeTranscriber([[event]])
+
+        summary = run_transcription_pump(
+            [audio_ref("player_3", emit_from_seconds=10.0)],
+            transcriber,
+            lambda emitted: sink_calls.append(emitted) or emitted,
+        )
+
+        self.assertEqual(summary.accepted_events, 1)
+        self.assertEqual(summary.rejected_events, 0)
+        self.assertEqual(sink_calls, [event])
 
     def test_transcription_errors_are_counted_and_later_refs_continue(self) -> None:
         router = TranscriptRouter(history_seconds=30, max_messages=10)

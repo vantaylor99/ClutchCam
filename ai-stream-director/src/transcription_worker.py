@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
 from typing import Callable, TextIO
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 from config import AppConfig, get_config
 from contracts import TranscriptEvent
@@ -20,6 +22,7 @@ from services.transcription import (
     FFmpegAudioExtractor,
     FasterWhisperTranscriber,
     Transcriber,
+    build_overlapped_audio_ref,
 )
 from services.health import run_runtime_healthcheck
 from services.transcription_runtime import (
@@ -37,6 +40,11 @@ POLL_INTERVAL_SECONDS = 0.5
 class _ChunkSnapshot:
     size_bytes: int
     modified_ns: int
+
+
+class AudioChunkDiscovery:
+    def discover(self) -> tuple[AudioInputRef, ...]:
+        """Return audio references ready to transcribe."""
 
 
 class JsonLinesTranscriptSink:
@@ -147,6 +155,62 @@ class CompletedAudioChunkDiscovery:
         )
 
 
+class OverlappedAudioWindowDiscovery:
+    """Adds a previous-chunk WAV tail to transcription requests when available."""
+
+    def __init__(
+        self,
+        base_discovery: AudioChunkDiscovery,
+        *,
+        config: AudioExtractionConfig,
+        overlap_seconds: float,
+    ) -> None:
+        self.base_discovery = base_discovery
+        self.config = config
+        self.overlap_seconds = float(overlap_seconds)
+        self._last_original_chunk_paths: dict[str, Path] = {}
+        self._retained_overlap_paths: set[Path] = set()
+
+    def discover(self) -> tuple[AudioInputRef, ...]:
+        base_refs = self.base_discovery.discover()
+        overlapped_refs: list[AudioInputRef] = []
+        current_overlap_paths: set[Path] = set()
+
+        for audio_ref in base_refs:
+            current_path = _local_file_path_from_uri(audio_ref.uri)
+            previous_path = self._previous_chunk_path(audio_ref.stream_id, current_path)
+            overlapped_ref = build_overlapped_audio_ref(
+                audio_ref=audio_ref,
+                current_chunk_path=current_path,
+                previous_chunk_path=previous_path,
+                overlap_seconds=self.overlap_seconds,
+                config=self.config,
+            )
+            overlapped_refs.append(overlapped_ref)
+            overlap_path = _overlap_path_if_local(overlapped_ref, audio_ref)
+            if overlap_path is not None:
+                current_overlap_paths.add(overlap_path)
+            self._last_original_chunk_paths[audio_ref.stream_id] = current_path
+
+        self._cleanup_stale_overlap_paths(current_overlap_paths)
+        self._retained_overlap_paths = current_overlap_paths
+        return tuple(overlapped_refs)
+
+    def _previous_chunk_path(self, stream_id: str, current_path: Path) -> Path | None:
+        numeric_previous_path = _numeric_previous_chunk_path(current_path)
+        if numeric_previous_path is not None:
+            return numeric_previous_path
+        return self._last_original_chunk_paths.get(stream_id)
+
+    def _cleanup_stale_overlap_paths(self, current_overlap_paths: set[Path]) -> None:
+        stale_paths = self._retained_overlap_paths.difference(current_overlap_paths)
+        for stale_path in stale_paths:
+            try:
+                stale_path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
 class TranscriptionWorker:
     """Owns extractor lifecycle and feeds discovered chunks into the pump."""
 
@@ -159,7 +223,7 @@ class TranscriptionWorker:
         sink: TranscriptEventSink,
         failure_sink: Callable[[TranscriptionRuntimeFailure], object | None]
         | None = None,
-        discovery: CompletedAudioChunkDiscovery | None = None,
+        discovery: AudioChunkDiscovery | None = None,
         stop_event: threading.Event | None = None,
         started_event: threading.Event | None = None,
         poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
@@ -260,6 +324,16 @@ def build_worker(
     extractor = FFmpegAudioExtractor(extraction_config)
     transcriber = FasterWhisperTranscriber.from_app_config(app_config)
     jsonl_sink = JsonLinesTranscriptSink(stdout)
+    discovery: AudioChunkDiscovery = CompletedAudioChunkDiscovery(
+        extraction_config,
+        extractor,
+    )
+    if app_config.transcription_request_overlap_seconds > 0:
+        discovery = OverlappedAudioWindowDiscovery(
+            discovery,
+            config=extraction_config,
+            overlap_seconds=app_config.transcription_request_overlap_seconds,
+        )
     return TranscriptionWorker(
         extraction_config=extraction_config,
         extractor=extractor,
@@ -272,6 +346,7 @@ def build_worker(
         started_event=started_event,
         poll_interval_seconds=poll_interval_seconds,
         fail_fast=fail_fast,
+        discovery=discovery,
     )
 
 
@@ -327,6 +402,39 @@ def _infer_chunk_start_seconds(
 ) -> float | None:
     try:
         return int(chunk_path.stem) * chunk_duration_seconds
+    except ValueError:
+        return None
+
+
+def _local_file_path_from_uri(uri: str) -> Path:
+    parsed = urlparse(uri)
+    windows_drive_path = len(parsed.scheme) == 1 and bool(Path(uri).drive)
+    if parsed.scheme == "file":
+        return Path(url2pathname(unquote(parsed.path))).resolve()
+    if not parsed.scheme or windows_drive_path:
+        return Path(uri).resolve()
+    raise ValueError(f"Audio chunk URI is not local: {uri}")
+
+
+def _numeric_previous_chunk_path(current_path: Path) -> Path | None:
+    try:
+        index = int(current_path.stem)
+    except ValueError:
+        return None
+    if index <= 0:
+        return None
+    previous_stem = f"{index - 1:0{len(current_path.stem)}d}"
+    return current_path.with_name(f"{previous_stem}{current_path.suffix}")
+
+
+def _overlap_path_if_local(
+    overlapped_ref: AudioInputRef,
+    original_ref: AudioInputRef,
+) -> Path | None:
+    if overlapped_ref.uri == original_ref.uri:
+        return None
+    try:
+        return _local_file_path_from_uri(overlapped_ref.uri)
     except ValueError:
         return None
 

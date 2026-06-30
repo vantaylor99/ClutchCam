@@ -351,6 +351,7 @@ AUDIO_EXTRACT_CHANNELS=1
 AUDIO_EXTRACT_CHUNK_SECONDS=5
 AUDIO_EXTRACT_CODEC=pcm_s16le
 AUDIO_EXTRACT_CONTAINER=wav
+TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0
 AUDIO_INPUT_URL_PLAYER_1=rtmp://media-server:1935/live/player_1
 AUDIO_INPUT_URL_PLAYER_2=rtmp://media-server:1935/live/player_2
 AUDIO_INPUT_URL_PLAYER_3=rtmp://media-server:1935/live/player_3
@@ -361,6 +362,11 @@ If a per-player audio input URL is not set, it falls back to
 `LOOKBACK_INPUT_URL_<PLAYER>` and then `<INGEST_API_URL>/<stream_id>`. The
 orchestrator and diagnostic worker should not be run as simultaneous
 transcription owners for the same live inputs.
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS` is disabled by default. When set above
+zero, it must be less than `AUDIO_EXTRACT_CHUNK_SECONDS` and requires
+`AUDIO_EXTRACT_CONTAINER=wav`; each request after a stream's first chunk
+includes that much audio tail from the previous chunk while the worker drops
+transcript events that end entirely before the current chunk start.
 
 ## Transcription API Adapter
 
@@ -376,6 +382,10 @@ segment response shapes, preserve stream identity, shift chunk-relative
 timestamps by the audio reference start time, and emit normalized
 `TranscriptEvent` objects. Multipart mode can only upload local paths or
 `file://` URIs that the worker can read.
+Overlapped transcription requests require timestamped segment responses so the
+worker can discard overlap-only text without duplicating downstream transcript
+events; non-overlapped text-only responses keep using the full audio reference
+duration.
 
 Docker Compose also includes an optional `faster-whisper` service for local
 Faster-Whisper hosting. Its documented default image is
@@ -398,6 +408,7 @@ TRANSCRIPTION_MODEL=Systran/faster-whisper-small
 TRANSCRIPTION_LANGUAGE=
 TRANSCRIPTION_RESPONSE_FORMAT=json
 TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS=30
+TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0
 LIVE_TRANSCRIPTION_ENABLED=false
 LIVE_TRANSCRIPTION_QUEUE_SIZE=16
 TRANSCRIPT_LOG_TEXT_ENABLED=false

@@ -251,6 +251,23 @@ class FasterWhisperTranscriberTests(unittest.TestCase):
             ),
         )
 
+    def test_text_response_without_timestamps_fails_for_overlap_request(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            post=lambda *args, **kwargs: FakeResponse({"text": "old and new"}),
+        )
+
+        with self.assertRaisesRegex(TranscriptionError, "requires timestamped"):
+            transcriber.transcribe(
+                AudioInputRef(
+                    stream_id="player_2",
+                    uri="file:///tmp/player_2.wav",
+                    starts_at_seconds=38.0,
+                    duration_seconds=7.0,
+                    emit_from_seconds=40.0,
+                )
+            )
+
     def test_openai_compatible_verbose_segments_preserve_chunk_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_path = Path(tmpdir) / "chunk.wav"

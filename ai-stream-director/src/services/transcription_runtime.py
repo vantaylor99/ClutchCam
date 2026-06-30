@@ -83,6 +83,9 @@ class TranscriptionRuntimePump:
             try:
                 for event in self._transcript_events(audio_ref):
                     emitted_transcript_events += 1
+                    if self._is_overlap_only_event(audio_ref, event):
+                        rejected_events += 1
+                        continue
                     if self._emit(event):
                         accepted_events += 1
                     else:
@@ -159,6 +162,17 @@ class TranscriptionRuntimePump:
             raise TranscriptionError(
                 f"Transcript sink failed for {event.stream_id}: {exc}"
             ) from exc
+
+    def _is_overlap_only_event(
+        self,
+        audio_ref: AudioInputRef,
+        event: TranscriptEvent,
+    ) -> bool:
+        if audio_ref.emit_from_seconds is None:
+            return False
+        if event.stream_id != audio_ref.stream_id:
+            return False
+        return event.end_time_seconds <= audio_ref.emit_from_seconds
 
 
 def run_transcription_pump(
