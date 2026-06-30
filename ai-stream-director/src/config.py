@@ -96,6 +96,10 @@ class AppConfig:
     max_focus_duration_seconds: int
     transcript_history_seconds: int
     transcript_history_messages: int
+    transcript_utterance_max_gap_seconds: float
+    transcript_utterance_max_duration_seconds: float
+    transcript_utterance_max_characters: int
+    transcript_utterance_max_events: int
     transcript_prefilter_enabled: bool
     transcript_prefilter_min_text_characters: int
     transcript_prefilter_duplicate_window_seconds: float
@@ -190,6 +194,22 @@ def get_config() -> AppConfig:
         max_focus_duration_seconds=_env_int("MAX_FOCUS_DURATION_SECONDS", "20"),
         transcript_history_seconds=_env_int("TRANSCRIPT_HISTORY_SECONDS", "30"),
         transcript_history_messages=_env_int("TRANSCRIPT_HISTORY_MESSAGES", "20"),
+        transcript_utterance_max_gap_seconds=_env_float(
+            "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS",
+            "2.0",
+        ),
+        transcript_utterance_max_duration_seconds=_env_float(
+            "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS",
+            "8.0",
+        ),
+        transcript_utterance_max_characters=_env_int(
+            "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS",
+            "240",
+        ),
+        transcript_utterance_max_events=_env_int(
+            "TRANSCRIPT_UTTERANCE_MAX_EVENTS",
+            "8",
+        ),
         transcript_prefilter_enabled=_parse_bool(
             os.getenv("TRANSCRIPT_PREFILTER_ENABLED", "true")
         ),
@@ -318,6 +338,22 @@ def validate_config(config: AppConfig) -> None:
     _require_positive_int(
         "TRANSCRIPT_HISTORY_MESSAGES",
         config.transcript_history_messages,
+    )
+    _require_positive(
+        "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS",
+        config.transcript_utterance_max_gap_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS",
+        config.transcript_utterance_max_duration_seconds,
+    )
+    _require_positive_int(
+        "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS",
+        config.transcript_utterance_max_characters,
+    )
+    _require_positive_int(
+        "TRANSCRIPT_UTTERANCE_MAX_EVENTS",
+        config.transcript_utterance_max_events,
     )
     _require_non_negative_int(
         "TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS",

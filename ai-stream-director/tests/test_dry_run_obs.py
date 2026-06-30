@@ -114,6 +114,22 @@ class DryRunOBSConfigTests(unittest.TestCase):
                 {"TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "0"},
                 "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS must be positive",
             ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_CHARACTERS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_EVENTS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_EVENTS must be positive",
+            ),
         )
 
         for env, message in cases:
@@ -217,6 +233,24 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.transcript_prefilter_context_seconds, 18.0)
         self.assertEqual(config.transcript_prefilter_min_confidence, 0.82)
 
+    def test_transcript_utterance_runtime_settings_are_configurable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS": "1.5",
+                "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS": "6.5",
+                "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS": "120",
+                "TRANSCRIPT_UTTERANCE_MAX_EVENTS": "4",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.transcript_utterance_max_gap_seconds, 1.5)
+        self.assertEqual(config.transcript_utterance_max_duration_seconds, 6.5)
+        self.assertEqual(config.transcript_utterance_max_characters, 120)
+        self.assertEqual(config.transcript_utterance_max_events, 4)
+
     def test_production_boundary_defaults_are_available(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             config = get_config()
@@ -227,6 +261,10 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.live_transcription_queue_size, 16)
         self.assertFalse(config.transcript_log_text_enabled)
         self.assertEqual(config.transcript_log_text_max_characters, 160)
+        self.assertEqual(config.transcript_utterance_max_gap_seconds, 2.0)
+        self.assertEqual(config.transcript_utterance_max_duration_seconds, 8.0)
+        self.assertEqual(config.transcript_utterance_max_characters, 240)
+        self.assertEqual(config.transcript_utterance_max_events, 8)
         self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
         self.assertEqual(config.lookback_window_seconds, 30)
         self.assertEqual(config.switch_lookback_seconds, 15)
@@ -600,6 +638,40 @@ class TerminalProcessLineAITests(unittest.TestCase):
         self.assertIn("Asking AI director", output.getvalue())
         self.assertIn("AI decision: Player 2 Fullscreen", output.getvalue())
         self.assertEqual(scheduler.status().current_scene, SCENES["player_2"])
+
+    def test_consecutive_manual_lines_can_assemble_before_ai_decision(self) -> None:
+        scheduler = self._build_started_scheduler()
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.9,
+            duration_seconds=12,
+            reason="Player 2 reacted.",
+        )
+
+        first_should_quit = process_line(
+            "player_2: holy",
+            transcript_router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+        second_should_quit = process_line(
+            "player_2: cow",
+            transcript_router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        self.assertFalse(first_should_quit)
+        self.assertFalse(second_should_quit)
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy cow",
+            candidate_signal=ANY,
+        )
+        self.assertEqual(transcript_router.get_recent_context_text(), "player_2: holy cow")
 
     def test_prefilter_skips_filler_without_calling_director(self) -> None:
         scheduler = self._build_started_scheduler()

@@ -277,6 +277,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     transcript_router = TranscriptRouter(
         history_seconds=config.transcript_history_seconds,
         max_messages=config.transcript_history_messages,
+        utterance_max_gap_seconds=config.transcript_utterance_max_gap_seconds,
+        utterance_max_duration_seconds=(
+            config.transcript_utterance_max_duration_seconds
+        ),
+        utterance_max_characters=config.transcript_utterance_max_characters,
+        utterance_max_events=config.transcript_utterance_max_events,
     )
     scheduler = SceneScheduler(
         obs_controller=obs_controller,
@@ -630,10 +636,16 @@ def evaluate_accepted_transcript(
         )
 
     trigger_prefilter = trigger_prefilter or TranscriptTriggerPrefilter()
+    candidate_events = transcript_router.get_recent_candidate_events()
+    reference_time_seconds = (
+        candidate_events[-1].end_time_seconds
+        if candidate_events
+        else message.timestamp
+    )
     candidate_signal = trigger_prefilter.classify(
         HypeContext(
-            transcripts=transcript_router.get_recent_events(),
-            reference_time_seconds=message.timestamp,
+            transcripts=candidate_events,
+            reference_time_seconds=reference_time_seconds,
         )
     )
     if candidate_signal is None:

@@ -83,6 +83,12 @@ Production defaults remain environment-driven through `config.py`, including
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
+The transcript router keeps raw timestamped events for audit and derives
+bounded same-stream utterance candidates with
+`TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS`,
+`TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS`,
+`TRANSCRIPT_UTTERANCE_MAX_CHARACTERS`, and
+`TRANSCRIPT_UTTERANCE_MAX_EVENTS` before local trigger checks.
 Live transcription and the standalone diagnostic worker also use
 `AUDIO_EXTRACT_DIR`, `AUDIO_EXTRACT_SAMPLE_RATE`, `AUDIO_EXTRACT_CHANNELS`,
 `AUDIO_EXTRACT_CHUNK_SECONDS`, `AUDIO_EXTRACT_CODEC`,
@@ -153,7 +159,10 @@ The integrated local Linux path keeps one transcription owner. When
 `TranscriptionWorker` source and routes final events through the import-safe
 `RuntimeTranscriptEventHandler`. Runtime events are routed through
 `TranscriptRouter.add_event(...)`, preserving stream IDs and media end
-timestamps before the local trigger prefilter and AI director run. The
+timestamps. The router then assembles nearby final events from the same stream
+into bounded utterance candidates before the local trigger prefilter and AI
+director run, so provider chunk boundaries do not split phrases such as
+`holy cow`. The
 standalone Compose `transcription-worker` service remains an explicit JSONL
 diagnostic and healthcheck path, not part of the default `local-linux` profile.
 Accepted runtime transcript text can be logged for evaluation by setting

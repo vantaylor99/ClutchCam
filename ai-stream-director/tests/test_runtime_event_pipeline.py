@@ -146,7 +146,7 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         )
 
         ai_director.decide.assert_called_once_with(
-            "player_2: holy\nplayer_2: cow",
+            "player_2: holy cow",
             candidate_signal=ANY,
         )
         candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
@@ -156,6 +156,45 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertIn("excitement phrase: holy cow", candidate_signal.reason)
         self.assertIs(second_result.candidate_signal, candidate_signal)
         self.assertEqual(second_result.reason, "decision_evaluated")
+
+    def test_repeated_assembled_utterance_inside_duplicate_window_is_skipped(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 reacted to a moment.",
+        )
+
+        events = (
+            TranscriptEvent("player_2", "holy", 20.0, 21.0),
+            TranscriptEvent("player_2", "cow", 21.5, 22.0),
+            TranscriptEvent("player_2", "holy", 25.0, 26.0),
+            TranscriptEvent("player_2", "cow", 26.5, 27.0),
+        )
+
+        results = [
+            process_transcript_event(
+                event,
+                router,
+                ai_director,
+                scheduler,
+                log=lambda message: None,
+            )
+            for event in events
+        ]
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy cow",
+            candidate_signal=ANY,
+        )
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["holy cow", "holy cow"],
+        )
+        self.assertEqual(results[-1].reason, "prefilter_rejected")
 
     def test_ai_disabled_runtime_event_skips_model_call_after_routing(self) -> None:
         scheduler = _started_scheduler()

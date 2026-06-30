@@ -224,10 +224,11 @@ def run_latency_soak(options: HarnessOptions | None = None) -> dict[str, object]
 
         counts["accepted_events"] += 1
         timer.record("local_prefilter", _deterministic_latency(4.0, index, 2.0))
+        candidate_events = router.get_recent_candidate_events()
         signal = trigger_prefilter.classify(
             HypeContext(
-                transcripts=router.get_recent_events(),
-                reference_time_seconds=message.timestamp,
+                transcripts=candidate_events,
+                reference_time_seconds=candidate_events[-1].end_time_seconds,
             )
         )
         if signal is None:
