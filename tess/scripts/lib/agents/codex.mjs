@@ -49,6 +49,7 @@ export function codex(instructionFile, _prompt, { cwd, stage, difficulty } = {})
 		'--color', 'never',
 		'--full-auto',
 		'--ephemeral',
+		'--ignore-user-config',
 		'-C', cwd,
 	];
 	if (model) args.push('-m', model);
