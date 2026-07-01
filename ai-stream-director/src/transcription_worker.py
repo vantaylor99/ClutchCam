@@ -167,8 +167,9 @@ class CompletedAudioChunkDiscovery:
         self.require_stable_snapshot = require_stable_snapshot
         self._pending: dict[Path, _ChunkSnapshot] = {}
         self._processed: set[Path] = set()
-        if skip_existing:
-            self._processed.update(self._existing_chunk_paths())
+        self._startup_snapshots: dict[Path, _ChunkSnapshot] = (
+            self._existing_chunk_snapshots() if skip_existing else {}
+        )
 
     def discover(self) -> tuple[AudioInputRef, ...]:
         audio_refs: list[AudioInputRef] = []
@@ -191,6 +192,7 @@ class CompletedAudioChunkDiscovery:
         stale_paths = set(self._pending).difference(current_paths)
         for stale_path in stale_paths:
             self._pending.pop(stale_path, None)
+            self._startup_snapshots.pop(stale_path, None)
 
         return tuple(audio_refs)
 
@@ -216,6 +218,12 @@ class CompletedAudioChunkDiscovery:
             self._pending[resolved_path] = snapshot
             return None
 
+        startup_snapshot = self._startup_snapshots.get(resolved_path)
+        if startup_snapshot is not None:
+            if startup_snapshot == snapshot:
+                return None
+            self._startup_snapshots.pop(resolved_path, None)
+
         if self.require_stable_snapshot:
             previous_snapshot = self._pending.get(resolved_path)
             self._pending[resolved_path] = snapshot
@@ -233,18 +241,23 @@ class CompletedAudioChunkDiscovery:
             ),
         )
 
-    def _existing_chunk_paths(self) -> set[Path]:
-        paths: set[Path] = set()
+    def _existing_chunk_snapshots(self) -> dict[Path, _ChunkSnapshot]:
+        snapshots: dict[Path, _ChunkSnapshot] = {}
         for stream_id in self.config.stream_ids:
             stream_dir = self.config.output_dir / stream_id
             if not stream_dir.exists():
                 continue
             for chunk_path in stream_dir.glob(f"*.{self.config.container}"):
                 try:
-                    paths.add(chunk_path.resolve())
+                    resolved_path = chunk_path.resolve()
+                    stat_result = resolved_path.stat()
                 except FileNotFoundError:
                     continue
-        return paths
+                snapshots[resolved_path] = _ChunkSnapshot(
+                    size_bytes=stat_result.st_size,
+                    modified_ns=stat_result.st_mtime_ns,
+                )
+        return snapshots
 
 
 class OverlappedAudioWindowDiscovery:
