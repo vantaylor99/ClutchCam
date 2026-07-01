@@ -251,6 +251,40 @@ class TranscriptionRuntimePumpTests(unittest.TestCase):
         self.assertEqual([call.stream_id for call in transcriber.calls], ["player_1"])
         self.assertEqual(accepted_events, [])
 
+    def test_stop_request_interrupts_remaining_audio_refs(self) -> None:
+        stop_requested = False
+        first = TranscriptEvent(
+            stream_id="player_1",
+            text="first chunk",
+            start_time_seconds=1.0,
+            end_time_seconds=2.0,
+        )
+        second = TranscriptEvent(
+            stream_id="player_2",
+            text="second chunk",
+            start_time_seconds=3.0,
+            end_time_seconds=4.0,
+        )
+        transcriber = FakeTranscriber([[first], [second]])
+        accepted_events: list[TranscriptEvent] = []
+
+        def sink(event: TranscriptEvent) -> TranscriptEvent:
+            nonlocal stop_requested
+            accepted_events.append(event)
+            stop_requested = True
+            return event
+
+        summary = TranscriptionRuntimePump(
+            transcriber=transcriber,
+            sink=sink,
+            should_stop=lambda: stop_requested,
+        ).run_once([audio_ref("player_1"), audio_ref("player_2")])
+
+        self.assertEqual([call.stream_id for call in transcriber.calls], ["player_1"])
+        self.assertEqual(accepted_events, [first])
+        self.assertEqual(summary.processed_audio_refs, 1)
+        self.assertEqual(summary.accepted_events, 1)
+
     def test_none_transcriber_output_is_malformed(self) -> None:
         transcriber = FakeTranscriber([None, []])
 

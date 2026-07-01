@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from contracts import TranscriptEvent
 from services.transcription import AudioInputRef, Transcriber, TranscriptionError
@@ -75,12 +75,14 @@ class TranscriptionRuntimePump:
         fail_fast: bool = False,
         final_events_only: bool = False,
         suppress_non_newer_final_events: bool = False,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.transcriber = transcriber
         self.sink = sink
         self.fail_fast = fail_fast
         self.final_events_only = final_events_only
         self.suppress_non_newer_final_events = suppress_non_newer_final_events
+        self.should_stop = should_stop or (lambda: False)
         self._last_final_end_by_stream: dict[str, float] = {}
 
     def run_once(
@@ -94,9 +96,13 @@ class TranscriptionRuntimePump:
         failures: list[TranscriptionRuntimeFailure] = []
 
         for audio_ref in audio_refs:
+            if self.should_stop():
+                break
             processed_audio_refs += 1
             try:
                 for event in self._transcript_events(audio_ref):
+                    if self.should_stop():
+                        break
                     emitted_transcript_events += 1
                     if self.final_events_only and not event.is_final:
                         rejected_events += 1

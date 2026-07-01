@@ -629,6 +629,7 @@ class TranscriptionWorker:
             fail_fast=fail_fast,
             final_events_only=final_events_only,
             suppress_non_newer_final_events=suppress_non_newer_final_events,
+            should_stop=self.stop_event.is_set,
         )
 
     def run_once(self) -> TranscriptionRuntimeSummary:
