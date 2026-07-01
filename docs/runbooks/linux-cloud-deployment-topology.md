@@ -9,6 +9,10 @@ Use this runbook with [Local Linux Compose stack](local-linux-compose.md). Keep
 all topology changes environment-driven; do not hard-code host names, cloud
 addresses, provider secrets, or GPU assumptions into application code.
 
+For real OBS reachability checks and the section-one acceptance checklist, use
+[Real OBS connection checkpoint](real-obs-connection.md). OBS control stays on
+the event network, even when AI or transcription move elsewhere.
+
 ## Stable Service Contracts
 
 These settings are the deployment boundary:
@@ -26,6 +30,10 @@ a LAN GPU transcription host, or a cloud speech-to-text endpoint. Select
 `TRANSCRIPTION_REQUEST_MODE=json` for ClutchCam's `/transcribe` JSON-reference
 contract, or `TRANSCRIPTION_REQUEST_MODE=openai-compatible` for multipart
 `/v1/audio/transcriptions` endpoints.
+
+OBS WebSocket stays separate from those service contracts. Use a reachable
+`OBS_HOST`, keep `OBS_PORT=4455` unless your OBS instance is configured
+otherwise, and store `OBS_PASSWORD` outside committed files.
 
 Keep media ingest behind `INGEST_API_URL` local to the event unless a future
 site-to-site network is explicitly designed for live media. Player and capture

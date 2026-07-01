@@ -29,6 +29,12 @@ SUPPORTED_TRANSCRIPTION_REQUEST_MODES = (
     TRANSCRIPTION_REQUEST_MODE_JSON,
     TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
 )
+TRANSCRIPTION_SOURCE_MODE_CHUNKED = "chunked"
+TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE = "vad-utterance"
+SUPPORTED_TRANSCRIPTION_SOURCE_MODES = (
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+)
 
 SECRET_REDACTION = "[REDACTED]"
 _SECRET_NAME_PARTS = ("key", "token", "password", "secret")
@@ -55,6 +61,16 @@ _TRANSCRIPTION_REQUEST_MODE_ALIASES = {
     "multipart": TRANSCRIPTION_REQUEST_MODE_OPENAI_COMPATIBLE,
 }
 
+_TRANSCRIPTION_SOURCE_MODE_ALIASES = {
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED: TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "chunks": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "fixed-chunk": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    "fixed-chunks": TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE: TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+    "vad": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+    "utterance": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+}
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -66,11 +82,20 @@ class AppConfig:
     ingest_api_url: str
     transcription_api_url: str
     transcription_request_mode: str
+    transcription_source_mode: str
     transcription_endpoint_path: str
     transcription_model: str
     transcription_language: str
     transcription_response_format: str
     transcription_request_timeout_seconds: float
+    transcription_request_overlap_seconds: float
+    transcription_vad_frame_ms: int
+    transcription_vad_energy_threshold: float
+    transcription_vad_min_speech_seconds: float
+    transcription_vad_min_silence_seconds: float
+    transcription_vad_leading_padding_seconds: float
+    transcription_vad_trailing_padding_seconds: float
+    transcription_vad_max_utterance_seconds: float
     live_transcription_enabled: bool
     live_transcription_queue_size: int
     transcript_log_text_enabled: bool
@@ -96,6 +121,10 @@ class AppConfig:
     max_focus_duration_seconds: int
     transcript_history_seconds: int
     transcript_history_messages: int
+    transcript_utterance_max_gap_seconds: float
+    transcript_utterance_max_duration_seconds: float
+    transcript_utterance_max_characters: int
+    transcript_utterance_max_events: int
     transcript_prefilter_enabled: bool
     transcript_prefilter_min_text_characters: int
     transcript_prefilter_duplicate_window_seconds: float
@@ -133,6 +162,12 @@ def get_config() -> AppConfig:
                 TRANSCRIPTION_REQUEST_MODE_JSON,
             )
         ),
+        transcription_source_mode=normalize_transcription_source_mode(
+            os.getenv(
+                "TRANSCRIPTION_SOURCE_MODE",
+                TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+            )
+        ),
         transcription_endpoint_path=os.getenv("TRANSCRIPTION_ENDPOINT_PATH", ""),
         transcription_model=os.getenv(
             "TRANSCRIPTION_MODEL",
@@ -146,6 +181,35 @@ def get_config() -> AppConfig:
         transcription_request_timeout_seconds=_env_float(
             "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
             "30",
+        ),
+        transcription_request_overlap_seconds=_env_float(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
+            "0",
+        ),
+        transcription_vad_frame_ms=_env_int("TRANSCRIPTION_VAD_FRAME_MS", "30"),
+        transcription_vad_energy_threshold=_env_float(
+            "TRANSCRIPTION_VAD_ENERGY_THRESHOLD",
+            "0.015",
+        ),
+        transcription_vad_min_speech_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS",
+            "0.18",
+        ),
+        transcription_vad_min_silence_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS",
+            "0.45",
+        ),
+        transcription_vad_leading_padding_seconds=_env_float(
+            "TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS",
+            "0.18",
+        ),
+        transcription_vad_trailing_padding_seconds=_env_float(
+            "TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS",
+            "0.24",
+        ),
+        transcription_vad_max_utterance_seconds=_env_float(
+            "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS",
+            "12",
         ),
         live_transcription_enabled=_parse_bool(
             os.getenv("LIVE_TRANSCRIPTION_ENABLED", "false")
@@ -190,6 +254,22 @@ def get_config() -> AppConfig:
         max_focus_duration_seconds=_env_int("MAX_FOCUS_DURATION_SECONDS", "20"),
         transcript_history_seconds=_env_int("TRANSCRIPT_HISTORY_SECONDS", "30"),
         transcript_history_messages=_env_int("TRANSCRIPT_HISTORY_MESSAGES", "20"),
+        transcript_utterance_max_gap_seconds=_env_float(
+            "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS",
+            "2.0",
+        ),
+        transcript_utterance_max_duration_seconds=_env_float(
+            "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS",
+            "8.0",
+        ),
+        transcript_utterance_max_characters=_env_int(
+            "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS",
+            "240",
+        ),
+        transcript_utterance_max_events=_env_int(
+            "TRANSCRIPT_UTTERANCE_MAX_EVENTS",
+            "8",
+        ),
         transcript_prefilter_enabled=_parse_bool(
             os.getenv("TRANSCRIPT_PREFILTER_ENABLED", "true")
         ),
@@ -260,6 +340,19 @@ def normalize_transcription_request_mode(value: str) -> str:
     )
 
 
+def normalize_transcription_source_mode(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    source_mode = _TRANSCRIPTION_SOURCE_MODE_ALIASES.get(normalized)
+    if source_mode is not None:
+        return source_mode
+
+    supported = ", ".join(SUPPORTED_TRANSCRIPTION_SOURCE_MODES)
+    raise ValueError(
+        "Unsupported TRANSCRIPTION_SOURCE_MODE "
+        f"{value!r}. Expected one of: {supported}."
+    )
+
+
 def validate_config(config: AppConfig) -> None:
     _require_text("OBS_HOST", config.obs_host)
     _validate_port("OBS_PORT", config.obs_port)
@@ -280,6 +373,43 @@ def validate_config(config: AppConfig) -> None:
         "TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS",
         config.transcription_request_timeout_seconds,
     )
+    _require_non_negative(
+        "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
+        config.transcription_request_overlap_seconds,
+    )
+    _require_positive_int("TRANSCRIPTION_VAD_FRAME_MS", config.transcription_vad_frame_ms)
+    _validate_unit_interval(
+        "TRANSCRIPTION_VAD_ENERGY_THRESHOLD",
+        config.transcription_vad_energy_threshold,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS",
+        config.transcription_vad_min_speech_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS",
+        config.transcription_vad_min_silence_seconds,
+    )
+    _require_non_negative(
+        "TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS",
+        config.transcription_vad_leading_padding_seconds,
+    )
+    _require_non_negative(
+        "TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS",
+        config.transcription_vad_trailing_padding_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS",
+        config.transcription_vad_max_utterance_seconds,
+    )
+    if (
+        config.transcription_vad_min_speech_seconds
+        > config.transcription_vad_max_utterance_seconds
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS cannot exceed "
+            "TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS."
+        )
     _require_positive_int(
         "LIVE_TRANSCRIPTION_QUEUE_SIZE",
         config.live_transcription_queue_size,
@@ -305,6 +435,22 @@ def validate_config(config: AppConfig) -> None:
     _require_positive("AUDIO_EXTRACT_CHUNK_SECONDS", config.audio_extract_chunk_seconds)
     _require_text("AUDIO_EXTRACT_CODEC", config.audio_extract_codec)
     _require_text("AUDIO_EXTRACT_CONTAINER", config.audio_extract_container)
+    if (
+        config.transcription_request_overlap_seconds
+        >= config.audio_extract_chunk_seconds
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS must be less than "
+            "AUDIO_EXTRACT_CHUNK_SECONDS."
+        )
+    if (
+        config.transcription_request_overlap_seconds > 0
+        and config.audio_extract_container.strip().lower() != "wav"
+    ):
+        raise ValueError(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS requires "
+            "AUDIO_EXTRACT_CONTAINER=wav."
+        )
     _validate_unit_interval("CONFIDENCE_THRESHOLD", config.confidence_threshold)
     _require_non_negative_int(
         "MIN_SWITCH_INTERVAL_SECONDS",
@@ -318,6 +464,22 @@ def validate_config(config: AppConfig) -> None:
     _require_positive_int(
         "TRANSCRIPT_HISTORY_MESSAGES",
         config.transcript_history_messages,
+    )
+    _require_positive(
+        "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS",
+        config.transcript_utterance_max_gap_seconds,
+    )
+    _require_positive(
+        "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS",
+        config.transcript_utterance_max_duration_seconds,
+    )
+    _require_positive_int(
+        "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS",
+        config.transcript_utterance_max_characters,
+    )
+    _require_positive_int(
+        "TRANSCRIPT_UTTERANCE_MAX_EVENTS",
+        config.transcript_utterance_max_events,
     )
     _require_non_negative_int(
         "TRANSCRIPT_PREFILTER_MIN_TEXT_CHARACTERS",

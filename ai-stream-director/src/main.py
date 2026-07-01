@@ -2,14 +2,18 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TextIO
 
 from ai_director import AIDirector, AIDirectorError, DirectorDecision
 from config import SCENES, AppConfig, get_config
 from contracts import HypeSignal, SwitcherTarget, TranscriptEvent
-from obs_controller import DryRunOBSController, OBSController
+from obs_controller import (
+    DryRunOBSController,
+    OBSController,
+    collect_obs_preflight,
+)
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
 from services.ai import (
     HypeContext,
@@ -24,7 +28,8 @@ from services.switcher import (
     buffered_target_from_signal,
 )
 from transcript_router import TranscriptMessage, TranscriptRouter
-from transcription_worker import TranscriptionWorker, build_worker
+from transcription_worker import build_transcription_event_source
+from services.transcription_runtime import TranscriptEventSource
 
 
 HELP_TEXT = """
@@ -138,12 +143,12 @@ class LiveTranscriptQueueSink:
 
 
 class LiveTranscriptionSource:
-    """Runs the transcription worker in-process and exposes queued events."""
+    """Runs a transcript event source in-process and exposes queued events."""
 
     def __init__(
         self,
         *,
-        worker: TranscriptionWorker,
+        worker: TranscriptEventSource,
         event_queue: queue.Queue[TranscriptEvent],
         log=print,
         thread_factory=threading.Thread,
@@ -194,7 +199,11 @@ class LiveTranscriptionSource:
                 return
 
             self._stop_requested = True
-            self.worker.stop_event.set()
+            stop = getattr(self.worker, "stop", None)
+            if callable(stop):
+                stop()
+            else:
+                self.worker.stop_event.set()
             thread = self._thread
 
         if thread is not None and thread is not threading.current_thread():
@@ -205,7 +214,11 @@ class LiveTranscriptionSource:
 
     def _run(self) -> None:
         try:
-            self.worker.run_forever()
+            start = getattr(self.worker, "start", None)
+            if callable(start):
+                start()
+            else:
+                self.worker.run_forever()
         except Exception as exc:
             self._startup_error = exc
             self.started_event.set()
@@ -277,6 +290,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     transcript_router = TranscriptRouter(
         history_seconds=config.transcript_history_seconds,
         max_messages=config.transcript_history_messages,
+        utterance_max_gap_seconds=config.transcript_utterance_max_gap_seconds,
+        utterance_max_duration_seconds=(
+            config.transcript_utterance_max_duration_seconds
+        ),
+        utterance_max_characters=config.transcript_utterance_max_characters,
+        utterance_max_events=config.transcript_utterance_max_events,
     )
     scheduler = SceneScheduler(
         obs_controller=obs_controller,
@@ -301,13 +320,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         obs_controller.connect()
         if not config.dry_run_obs:
-            missing_scenes = find_missing_scenes(
-                available_scenes=obs_controller.list_scenes(),
+            preflight = collect_obs_preflight(
+                obs_controller,
                 required_scenes=SCENES.values(),
             )
-            if missing_scenes:
+            if preflight.missing_required_scenes:
                 print("OBS is missing required scenes:")
-                for scene_name in missing_scenes:
+                for scene_name in preflight.missing_required_scenes:
                     print(f"  - {scene_name}")
                 print("Create or rename the OBS scenes so they match exactly.")
                 return 1
@@ -355,16 +374,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         transcript_log_text_max_characters=config.transcript_log_text_max_characters,
         log=terminal_output.log,
     )
-
-
-def find_missing_scenes(
-    available_scenes: Iterable[str],
-    required_scenes: Iterable[str],
-) -> list[str]:
-    available = set(available_scenes)
-    return [scene_name for scene_name in required_scenes if scene_name not in available]
-
-
 def build_live_transcription_source(
     config: AppConfig,
     *,
@@ -382,14 +391,14 @@ def build_live_transcription_source(
         )
 
     started_event = threading.Event()
-    worker = build_worker(
+    source = build_transcription_event_source(
         app_config=config,
         sink=queue_sink,
         failure_sink=failure_sink,
         started_event=started_event,
     )
     return LiveTranscriptionSource(
-        worker=worker,
+        worker=source,
         event_queue=event_queue,
         log=log,
         started_event=started_event,
@@ -630,10 +639,16 @@ def evaluate_accepted_transcript(
         )
 
     trigger_prefilter = trigger_prefilter or TranscriptTriggerPrefilter()
+    candidate_events = transcript_router.get_recent_candidate_events()
+    reference_time_seconds = (
+        candidate_events[-1].end_time_seconds
+        if candidate_events
+        else message.timestamp
+    )
     candidate_signal = trigger_prefilter.classify(
         HypeContext(
-            transcripts=transcript_router.get_recent_events(),
-            reference_time_seconds=message.timestamp,
+            transcripts=candidate_events,
+            reference_time_seconds=reference_time_seconds,
         )
     )
     if candidate_signal is None:

@@ -128,6 +128,11 @@ class LinuxComposeStackTests(unittest.TestCase):
             transcription_worker,
         )
         self.assertIn(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS: "
+            "${TRANSCRIPTION_REQUEST_OVERLAP_SECONDS:-0}",
+            transcription_worker,
+        )
+        self.assertIn(
             "AUDIO_INPUT_URL_PLAYER_1: "
             "${AUDIO_INPUT_URL_PLAYER_1:-rtmp://media-server:1935/live/player_1}",
             transcription_worker,
@@ -149,6 +154,11 @@ class LinuxComposeStackTests(unittest.TestCase):
         )
         self.assertIn(
             "LIVE_TRANSCRIPTION_QUEUE_SIZE: ${LIVE_TRANSCRIPTION_QUEUE_SIZE:-16}",
+            orchestrator,
+        )
+        self.assertIn(
+            "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS: "
+            "${TRANSCRIPTION_REQUEST_OVERLAP_SECONDS:-0}",
             orchestrator,
         )
         self.assertIn(
@@ -269,6 +279,7 @@ class LinuxComposeStackTests(unittest.TestCase):
         )
         self.assertIn("LIVE_TRANSCRIPTION_ENABLED=false", env_example)
         self.assertIn("LIVE_TRANSCRIPTION_QUEUE_SIZE=16", env_example)
+        self.assertIn("TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0", env_example)
         self.assertIn("TRANSCRIPT_LOG_TEXT_ENABLED=false", env_example)
         self.assertIn("TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS=160", env_example)
         self.assertIn(
@@ -300,6 +311,7 @@ class LinuxComposeStackTests(unittest.TestCase):
         self.assertIn("<TRANSCRIPTION_API_URL>/transcribe", docs)
         self.assertIn("/v1/audio/transcriptions", docs)
         self.assertIn("TRANSCRIPT_LOG_TEXT_ENABLED", docs)
+        self.assertIn("TRANSCRIPTION_REQUEST_OVERLAP_SECONDS", docs)
 
 
 if __name__ == "__main__":

@@ -73,6 +73,165 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
             123.25,
         )
 
+    def test_added_gaming_callout_reaches_ai_director(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 made a strong play.",
+        )
+
+        result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="that was nasty",
+                start_time_seconds=20.0,
+                end_time_seconds=21.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: that was nasty",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(candidate_signal.stream_id, "player_2")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 21.0)
+        self.assertIn("gaming callout phrase", candidate_signal.reason)
+        self.assertIs(result.candidate_signal, candidate_signal)
+        self.assertTrue(result.ai_evaluation_attempted)
+        self.assertEqual(result.reason, "decision_evaluated")
+
+    def test_vad_final_event_uses_existing_router_and_ai_path(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_1"],
+            confidence=0.92,
+            duration_seconds=10,
+            reason="Player 1 called out a rare find.",
+        )
+
+        result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_1",
+                text="no way I found diamonds",
+                start_time_seconds=120.4,
+                end_time_seconds=122.0,
+                is_final=True,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_1: no way I found diamonds",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(candidate_signal.stream_id, "player_1")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 122.0)
+        self.assertIn("no way", candidate_signal.reason)
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reason, "decision_evaluated")
+
+    def test_split_transcript_fragments_reach_ai_director_on_second_event(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 reacted to a moment.",
+        )
+
+        first_result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="holy",
+                start_time_seconds=20.0,
+                end_time_seconds=21.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+        second_result = process_transcript_event(
+            TranscriptEvent(
+                stream_id="player_2",
+                text="cow",
+                start_time_seconds=21.5,
+                end_time_seconds=22.0,
+            ),
+            router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy cow",
+            candidate_signal=ANY,
+        )
+        candidate_signal = ai_director.decide.call_args.kwargs["candidate_signal"]
+        self.assertEqual(first_result.reason, "prefilter_rejected")
+        self.assertEqual(candidate_signal.stream_id, "player_2")
+        self.assertEqual(candidate_signal.trigger_time_seconds, 22.0)
+        self.assertIn("excitement phrase: holy cow", candidate_signal.reason)
+        self.assertIs(second_result.candidate_signal, candidate_signal)
+        self.assertEqual(second_result.reason, "decision_evaluated")
+
+    def test_repeated_assembled_utterance_inside_duplicate_window_is_skipped(self) -> None:
+        scheduler = _started_scheduler()
+        router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.91,
+            duration_seconds=11,
+            reason="Player 2 reacted to a moment.",
+        )
+
+        events = (
+            TranscriptEvent("player_2", "holy", 20.0, 21.0),
+            TranscriptEvent("player_2", "cow", 21.5, 22.0),
+            TranscriptEvent("player_2", "holy", 25.0, 26.0),
+            TranscriptEvent("player_2", "cow", 26.5, 27.0),
+        )
+
+        results = [
+            process_transcript_event(
+                event,
+                router,
+                ai_director,
+                scheduler,
+                log=lambda message: None,
+            )
+            for event in events
+        ]
+
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy cow",
+            candidate_signal=ANY,
+        )
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["holy cow", "holy cow"],
+        )
+        self.assertEqual(results[-1].reason, "prefilter_rejected")
+
     def test_ai_disabled_runtime_event_skips_model_call_after_routing(self) -> None:
         scheduler = _started_scheduler()
         scheduler.set_ai_enabled(False)
@@ -407,6 +566,44 @@ class RuntimeTranscriptEventPipelineTests(unittest.TestCase):
         self.assertEqual(worker.run_calls, 1)
         self.assertTrue(worker.stop_event.is_set())
 
+    def test_live_transcription_source_starts_and_stops_generic_source(self) -> None:
+        started_event = threading.Event()
+        worker = FakeTranscriptEventSource(started_event=started_event)
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            started_event=started_event,
+            startup_timeout_seconds=0.5,
+            log=lambda message: None,
+        )
+
+        source.start()
+        source.stop()
+
+        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(worker.stop_calls, 1)
+
+    def test_live_transcription_source_does_not_treat_start_attribute_error_as_legacy_worker(self) -> None:
+        output = io.StringIO()
+        worker = FakeBrokenStartSource()
+        source = LiveTranscriptionSource(
+            worker=worker,
+            event_queue=queue.Queue(),
+            startup_timeout_seconds=0.1,
+            log=lambda message: print(message, file=output),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Live transcription source failed to start",
+        ):
+            source.start()
+
+        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(worker.run_forever_calls, 0)
+        self.assertEqual(worker.stop_calls, 1)
+        self.assertIn("source missing field", output.getvalue())
+
     def test_accepted_ai_decision_resolves_buffered_switch_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_switcher = BufferBackedSwitcher(
@@ -520,6 +717,42 @@ class FakeLiveWorker:
         if self.started_event is not None:
             self.started_event.set()
         self.stop_event.wait(1.0)
+
+
+class FakeTranscriptEventSource:
+    def __init__(self, *, started_event: threading.Event) -> None:
+        self.started_event = started_event
+        self.stop_event = threading.Event()
+        self.start_calls = 0
+        self.stop_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+        self.started_event.set()
+        self.stop_event.wait(1.0)
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.stop_event.set()
+
+
+class FakeBrokenStartSource:
+    def __init__(self) -> None:
+        self.stop_event = threading.Event()
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.run_forever_calls = 0
+
+    def start(self) -> None:
+        self.start_calls += 1
+        raise AttributeError("source missing field")
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.stop_event.set()
+
+    def run_forever(self) -> None:
+        self.run_forever_calls += 1
 
 
 class FakeLoopScheduler:

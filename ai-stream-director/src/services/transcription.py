@@ -7,6 +7,7 @@ import math
 import subprocess
 import threading
 import time
+import wave
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,7 @@ class AudioInputRef:
     codec: str | None = None
     sample_rate_hz: int | None = None
     channels: int | None = None
+    emit_from_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,139 @@ class Transcriber(Protocol):
 
     def transcribe(self, audio: AudioInputRef) -> Iterable[TranscriptEvent]:
         """Yield transcript events for the supplied audio reference."""
+
+
+def build_overlapped_audio_ref(
+    *,
+    audio_ref: AudioInputRef,
+    current_chunk_path: Path | str,
+    previous_chunk_path: Path | str | None,
+    overlap_seconds: float,
+    config: AudioExtractionConfig,
+    logger: logging.Logger = LOGGER,
+) -> AudioInputRef:
+    """Compose a WAV request window containing previous tail plus current chunk."""
+
+    overlap_seconds = float(overlap_seconds)
+    if overlap_seconds <= 0 or previous_chunk_path is None:
+        return audio_ref
+    if audio_ref.starts_at_seconds is None:
+        logger.warning(
+            "transcription_overlap_skipped stream=%s reason=missing_start_time "
+            "chunk=%s",
+            audio_ref.stream_id,
+            current_chunk_path,
+        )
+        return audio_ref
+    if str(config.container).strip().lower() != "wav":
+        logger.warning(
+            "transcription_overlap_skipped stream=%s reason=non_wav_container "
+            "container=%s chunk=%s",
+            audio_ref.stream_id,
+            config.container,
+            current_chunk_path,
+        )
+        return audio_ref
+
+    current_path = Path(current_chunk_path)
+    previous_path = Path(previous_chunk_path)
+    try:
+        current_path = current_path.resolve(strict=True)
+        previous_path = previous_path.resolve(strict=True)
+    except OSError as exc:
+        logger.warning(
+            "transcription_overlap_skipped stream=%s reason=missing_chunk "
+            "previous=%s current=%s error=%r",
+            audio_ref.stream_id,
+            previous_chunk_path,
+            current_chunk_path,
+            exc,
+        )
+        return audio_ref
+
+    if current_path.suffix.lower() != ".wav" or previous_path.suffix.lower() != ".wav":
+        logger.warning(
+            "transcription_overlap_skipped stream=%s reason=not_wav previous=%s "
+            "current=%s",
+            audio_ref.stream_id,
+            previous_path,
+            current_path,
+        )
+        return audio_ref
+
+    overlap_dir = Path(config.output_dir) / "_overlap" / audio_ref.stream_id
+    output_path = overlap_dir / f"{current_path.stem}.wav"
+
+    try:
+        with wave.open(str(previous_path), "rb") as previous_wav:
+            previous_params = previous_wav.getparams()
+            previous_frame_count = previous_wav.getnframes()
+            previous_rate = previous_wav.getframerate()
+            overlap_frames = min(
+                previous_frame_count,
+                max(0, int(round(overlap_seconds * previous_rate))),
+            )
+            previous_wav.setpos(previous_frame_count - overlap_frames)
+            overlap_frames_data = previous_wav.readframes(overlap_frames)
+
+        with wave.open(str(current_path), "rb") as current_wav:
+            current_params = current_wav.getparams()
+            current_frame_count = current_wav.getnframes()
+            current_rate = current_wav.getframerate()
+            if not _wav_params_compatible(previous_params, current_params):
+                logger.warning(
+                    "transcription_overlap_skipped stream=%s "
+                    "reason=incompatible_wav previous=%s current=%s",
+                    audio_ref.stream_id,
+                    previous_path,
+                    current_path,
+                )
+                return audio_ref
+            current_frames_data = current_wav.readframes(current_frame_count)
+
+        overlap_dir.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(output_path), "wb") as output_wav:
+            output_wav.setparams(current_params)
+            output_wav.writeframes(overlap_frames_data)
+            output_wav.writeframes(current_frames_data)
+    except (EOFError, OSError, wave.Error) as exc:
+        logger.warning(
+            "transcription_overlap_skipped stream=%s reason=wav_error "
+            "previous=%s current=%s error=%r",
+            audio_ref.stream_id,
+            previous_path,
+            current_path,
+            exc,
+        )
+        return audio_ref
+
+    actual_overlap_seconds = overlap_frames / float(current_rate)
+    current_duration_seconds = current_frame_count / float(current_rate)
+    return AudioInputRef(
+        stream_id=audio_ref.stream_id,
+        uri=output_path.resolve().as_uri(),
+        starts_at_seconds=max(
+            0.0,
+            float(audio_ref.starts_at_seconds) - actual_overlap_seconds,
+        ),
+        duration_seconds=actual_overlap_seconds + current_duration_seconds,
+        codec=audio_ref.codec,
+        sample_rate_hz=audio_ref.sample_rate_hz,
+        channels=audio_ref.channels,
+        emit_from_seconds=float(audio_ref.starts_at_seconds),
+    )
+
+
+def _wav_params_compatible(
+    left: wave._wave_params,
+    right: wave._wave_params,
+) -> bool:
+    return (
+        left.nchannels == right.nchannels
+        and left.sampwidth == right.sampwidth
+        and left.framerate == right.framerate
+        and left.comptype == right.comptype
+    )
 
 
 class FasterWhisperTranscriber:
@@ -745,6 +880,11 @@ def _events_from_payload(
                 audio.stream_id,
                 offset,
                 duration_seconds=audio.duration_seconds,
+                require_timestamps=(
+                    audio.emit_from_seconds is not None
+                    and audio.starts_at_seconds is not None
+                    and audio.emit_from_seconds > audio.starts_at_seconds
+                ),
             )
         )
 
@@ -778,6 +918,7 @@ def _event_from_segment(
     stream_id: str,
     offset_seconds: float,
     duration_seconds: float | None = None,
+    require_timestamps: bool = False,
 ) -> TranscriptEvent:
     text = str(segment.get("text", "")).strip()
     if not text:
@@ -786,6 +927,11 @@ def _event_from_segment(
     start = _segment_time_or_none(segment, "start", "start_seconds")
     end = _segment_time_or_none(segment, "end", "end_seconds")
     if start is None and end is None:
+        if require_timestamps:
+            raise TranscriptionError(
+                "Transcription overlap requires timestamped transcription "
+                "segments; text-only responses cannot be de-duplicated."
+            )
         if duration_seconds is None:
             raise TranscriptionError(
                 "Transcription segment is missing timestamps and audio duration."

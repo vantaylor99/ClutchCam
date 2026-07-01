@@ -18,12 +18,19 @@ from config import (  # noqa: E402
     AI_PROVIDER_OPENAI_COMPATIBLE,
     SECRET_REDACTION,
     SCENES,
+    TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+    TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
     get_config,
     redact_secrets,
 )
 from ai_director import DirectorDecision  # noqa: E402
-from main import TerminalOutput, find_missing_scenes, process_line  # noqa: E402
-from obs_controller import DryRunOBSController, OBSController  # noqa: E402
+from main import TerminalOutput, process_line  # noqa: E402
+from obs_controller import (  # noqa: E402
+    DryRunOBSController,
+    OBSController,
+    collect_obs_preflight,
+    find_missing_scenes,
+)
 from scheduler import SceneScheduler  # noqa: E402
 from transcript_router import TranscriptRouter  # noqa: E402
 
@@ -111,8 +118,28 @@ class DryRunOBSConfigTests(unittest.TestCase):
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE must be positive",
             ),
             (
+                {"TRANSCRIPTION_SOURCE_MODE": "mystery"},
+                "Unsupported TRANSCRIPTION_SOURCE_MODE",
+            ),
+            (
                 {"TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "0"},
                 "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_CHARACTERS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS must be positive",
+            ),
+            (
+                {"TRANSCRIPT_UTTERANCE_MAX_EVENTS": "0"},
+                "TRANSCRIPT_UTTERANCE_MAX_EVENTS must be positive",
             ),
         )
 
@@ -217,6 +244,24 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.transcript_prefilter_context_seconds, 18.0)
         self.assertEqual(config.transcript_prefilter_min_confidence, 0.82)
 
+    def test_transcript_utterance_runtime_settings_are_configurable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS": "1.5",
+                "TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS": "6.5",
+                "TRANSCRIPT_UTTERANCE_MAX_CHARACTERS": "120",
+                "TRANSCRIPT_UTTERANCE_MAX_EVENTS": "4",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.transcript_utterance_max_gap_seconds, 1.5)
+        self.assertEqual(config.transcript_utterance_max_duration_seconds, 6.5)
+        self.assertEqual(config.transcript_utterance_max_characters, 120)
+        self.assertEqual(config.transcript_utterance_max_events, 4)
+
     def test_production_boundary_defaults_are_available(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             config = get_config()
@@ -227,6 +272,10 @@ class DryRunOBSConfigTests(unittest.TestCase):
         self.assertEqual(config.live_transcription_queue_size, 16)
         self.assertFalse(config.transcript_log_text_enabled)
         self.assertEqual(config.transcript_log_text_max_characters, 160)
+        self.assertEqual(config.transcript_utterance_max_gap_seconds, 2.0)
+        self.assertEqual(config.transcript_utterance_max_duration_seconds, 8.0)
+        self.assertEqual(config.transcript_utterance_max_characters, 240)
+        self.assertEqual(config.transcript_utterance_max_events, 8)
         self.assertEqual(config.lookback_buffer_dir, "/dev/shm/clutchcam")
         self.assertEqual(config.lookback_window_seconds, 30)
         self.assertEqual(config.switch_lookback_seconds, 15)
@@ -263,6 +312,7 @@ class DryRunOBSConfigTests(unittest.TestCase):
             {
                 "LIVE_TRANSCRIPTION_ENABLED": "true",
                 "LIVE_TRANSCRIPTION_QUEUE_SIZE": "3",
+                "TRANSCRIPTION_SOURCE_MODE": "vad_utterance",
                 "TRANSCRIPT_LOG_TEXT_ENABLED": "true",
                 "TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS": "42",
             },
@@ -272,8 +322,34 @@ class DryRunOBSConfigTests(unittest.TestCase):
 
         self.assertTrue(config.live_transcription_enabled)
         self.assertEqual(config.live_transcription_queue_size, 3)
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+        )
         self.assertTrue(config.transcript_log_text_enabled)
         self.assertEqual(config.transcript_log_text_max_characters, 42)
+
+    def test_transcription_source_mode_defaults_to_chunked(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = get_config()
+
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+        )
+
+    def test_transcription_source_mode_accepts_chunked_alias(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIPTION_SOURCE_MODE": "fixed_chunks"},
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(
+            config.transcription_source_mode,
+            TRANSCRIPTION_SOURCE_MODE_CHUNKED,
+        )
 
 
 class DryRunOBSControllerTests(unittest.TestCase):
@@ -393,6 +469,47 @@ class OBSControllerSceneListTests(unittest.TestCase):
         self.assertEqual(
             controller.list_scenes(),
             [SCENES["quad"], SCENES["player_1"]],
+        )
+
+    def test_get_obs_version_uses_cached_connect_result(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        controller._obs_version = "30.2.3"
+
+        self.assertEqual(controller.get_obs_version(), "30.2.3")
+        controller.client.get_version.assert_not_called()
+
+    def test_collect_obs_preflight_reads_version_scene_and_missing_required(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        version_response = Mock()
+        version_response.obs_version = "30.2.3"
+        controller.client.get_version.return_value = version_response
+        current_scene_response = Mock()
+        current_scene_response.current_program_scene_name = SCENES["player_2"]
+        controller.client.get_current_program_scene.return_value = current_scene_response
+        scene_list_response = Mock()
+        scene_list_response.scenes = [
+            {"sceneName": SCENES["quad"]},
+            {"sceneName": SCENES["player_2"]},
+            {"sceneName": SCENES["player_4"]},
+        ]
+        controller.client.get_scene_list.return_value = scene_list_response
+
+        preflight = collect_obs_preflight(
+            controller,
+            required_scenes=SCENES.values(),
+        )
+
+        self.assertEqual(preflight.obs_version, "30.2.3")
+        self.assertEqual(preflight.current_program_scene, SCENES["player_2"])
+        self.assertEqual(
+            preflight.scenes,
+            (SCENES["quad"], SCENES["player_2"], SCENES["player_4"]),
+        )
+        self.assertEqual(
+            preflight.missing_required_scenes,
+            (SCENES["player_1"], SCENES["player_3"]),
         )
 
     def test_set_media_source_updates_file_uri_input_settings(self) -> None:
@@ -600,6 +717,40 @@ class TerminalProcessLineAITests(unittest.TestCase):
         self.assertIn("Asking AI director", output.getvalue())
         self.assertIn("AI decision: Player 2 Fullscreen", output.getvalue())
         self.assertEqual(scheduler.status().current_scene, SCENES["player_2"])
+
+    def test_consecutive_manual_lines_can_assemble_before_ai_decision(self) -> None:
+        scheduler = self._build_started_scheduler()
+        transcript_router = TranscriptRouter(history_seconds=30, max_messages=20)
+        ai_director = Mock()
+        ai_director.decide.return_value = DirectorDecision(
+            target_scene=SCENES["player_2"],
+            confidence=0.9,
+            duration_seconds=12,
+            reason="Player 2 reacted.",
+        )
+
+        first_should_quit = process_line(
+            "player_2: holy",
+            transcript_router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+        second_should_quit = process_line(
+            "player_2: cow",
+            transcript_router,
+            ai_director,
+            scheduler,
+            log=lambda message: None,
+        )
+
+        self.assertFalse(first_should_quit)
+        self.assertFalse(second_should_quit)
+        ai_director.decide.assert_called_once_with(
+            "player_2: holy cow",
+            candidate_signal=ANY,
+        )
+        self.assertEqual(transcript_router.get_recent_context_text(), "player_2: holy cow")
 
     def test_prefilter_skips_filler_without_calling_director(self) -> None:
         scheduler = self._build_started_scheduler()

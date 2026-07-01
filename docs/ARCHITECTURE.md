@@ -76,13 +76,22 @@ Production defaults remain environment-driven through `config.py`, including
 `TRANSCRIPTION_REQUEST_MODE`, `TRANSCRIPTION_ENDPOINT_PATH`,
 `TRANSCRIPTION_MODEL`, `TRANSCRIPTION_LANGUAGE`,
 `TRANSCRIPTION_RESPONSE_FORMAT`, `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`,
-`LIVE_TRANSCRIPTION_ENABLED`, `LIVE_TRANSCRIPTION_QUEUE_SIZE`,
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS`, `TRANSCRIPTION_SOURCE_MODE`,
+the `TRANSCRIPTION_VAD_*` local speech-pause settings,
+`LIVE_TRANSCRIPTION_ENABLED`,
+`LIVE_TRANSCRIPTION_QUEUE_SIZE`,
 `TRANSCRIPT_LOG_TEXT_ENABLED`, `TRANSCRIPT_LOG_TEXT_MAX_CHARACTERS`,
 `GEMMA_API_URL`, `GEMMA_MODEL`, optional `GEMMA_API_KEY`,
 `LOOKBACK_BUFFER_DIR`, `LOOKBACK_WINDOW_SECONDS`, and
 `SWITCH_LOOKBACK_SECONDS`. The lookback buffer also uses
 `LOOKBACK_SEGMENT_SECONDS`, `FFMPEG_EXECUTABLE`, and optional
 `LOOKBACK_INPUT_URL_PLAYER_1` through `LOOKBACK_INPUT_URL_PLAYER_4` overrides.
+The transcript router keeps raw timestamped events for audit and derives
+bounded same-stream utterance candidates with
+`TRANSCRIPT_UTTERANCE_MAX_GAP_SECONDS`,
+`TRANSCRIPT_UTTERANCE_MAX_DURATION_SECONDS`,
+`TRANSCRIPT_UTTERANCE_MAX_CHARACTERS`, and
+`TRANSCRIPT_UTTERANCE_MAX_EVENTS` before local trigger checks.
 Live transcription and the standalone diagnostic worker also use
 `AUDIO_EXTRACT_DIR`, `AUDIO_EXTRACT_SAMPLE_RATE`, `AUDIO_EXTRACT_CHANNELS`,
 `AUDIO_EXTRACT_CHUNK_SECONDS`, `AUDIO_EXTRACT_CODEC`,
@@ -147,13 +156,38 @@ when `TRANSCRIPTION_REQUEST_MODE=openai-compatible`. It normalizes common text
 and segment response shapes, shifts chunk-relative timestamps, uses audio chunk
 duration when text-only responses omit segment timestamps, and emits
 `TranscriptEvent` objects.
+`TRANSCRIPTION_REQUEST_OVERLAP_SECONDS` can opt each request after a stream's
+first chunk into a local WAV window containing the previous chunk tail plus the
+current chunk. The worker keeps transcript timestamps on the media timeline and
+drops events that end entirely before the current chunk start; overlap requires
+timestamped segment responses so text-only responses do not duplicate the
+previous chunk tail.
+
+`TRANSCRIPTION_SOURCE_MODE` selects how audio becomes provider requests before
+those responses normalize to `TranscriptEvent`:
+
+- `chunked` is the default and fallback. FFmpeg segments each stream into fixed
+  WAV chunks, every stable chunk is transcribed, optional WAV overlap can reduce
+  missed boundary phrases, and only final transcript events reach switching.
+- `vad-utterance` is optional. FFmpeg still normalizes stream audio to mono
+  `pcm_s16le` WAV chunks, local voice activity detection groups speech around
+  pauses before provider requests, and provider responses still normalize to the
+  same transcript event contract. The existing `TranscriptRouter` still
+  assembles nearby final events into bounded trigger candidates; VAD windows do
+  not bypass the prefilter or AI director path.
+- A future provider streaming source can plug into the same live source boundary
+  if a provider emits partial and final transcript events directly. That mode is
+  intentionally separate from this local pre-request VAD implementation.
 
 The integrated local Linux path keeps one transcription owner. When
 `LIVE_TRANSCRIPTION_ENABLED=true`, the orchestrator starts an in-process
 `TranscriptionWorker` source and routes final events through the import-safe
 `RuntimeTranscriptEventHandler`. Runtime events are routed through
 `TranscriptRouter.add_event(...)`, preserving stream IDs and media end
-timestamps before the local trigger prefilter and AI director run. The
+timestamps. The router then assembles nearby final events from the same stream
+into bounded utterance candidates before the local trigger prefilter and AI
+director run, so provider chunk boundaries do not split phrases such as
+`holy cow`. The
 standalone Compose `transcription-worker` service remains an explicit JSONL
 diagnostic and healthcheck path, not part of the default `local-linux` profile.
 Accepted runtime transcript text can be logged for evaluation by setting
@@ -256,6 +290,13 @@ overridden for experiments with `--budget stage=milliseconds`; live
 infrastructure comparisons should remain opt-in and keep the same JSON shape so
 offline, LAN, and cloud endpoint runs are comparable.
 
+When comparing `chunked` and `vad-utterance`, operators should use the same
+fixture or rehearsal stream and record missed trigger phrases, duplicate
+triggers, speech-end-to-accepted-transcript latency, host CPU/GPU use,
+transcription backend request count and duration, and backend cost if the
+provider is remote or metered. Transcript text logging remains opt-in through
+`TRANSCRIPT_LOG_TEXT_ENABLED` because player speech can be sensitive.
+
 ## Infrastructure Boundaries
 
 The app logic must not know where inference runs. Local Ollama, local vLLM, and
@@ -267,11 +308,20 @@ cloud GPU inference should all be selected by environment variables:
 - `GEMMA_API_KEY`
 - `TRANSCRIPTION_API_URL`
 - `TRANSCRIPTION_REQUEST_MODE`
+- `TRANSCRIPTION_SOURCE_MODE`
 - `TRANSCRIPTION_ENDPOINT_PATH`
 - `TRANSCRIPTION_MODEL`
 - `TRANSCRIPTION_LANGUAGE`
 - `TRANSCRIPTION_RESPONSE_FORMAT`
 - `TRANSCRIPTION_REQUEST_TIMEOUT_SECONDS`
+- `TRANSCRIPTION_REQUEST_OVERLAP_SECONDS`
+- `TRANSCRIPTION_VAD_FRAME_MS`
+- `TRANSCRIPTION_VAD_ENERGY_THRESHOLD`
+- `TRANSCRIPTION_VAD_MIN_SPEECH_SECONDS`
+- `TRANSCRIPTION_VAD_MIN_SILENCE_SECONDS`
+- `TRANSCRIPTION_VAD_LEADING_PADDING_SECONDS`
+- `TRANSCRIPTION_VAD_TRAILING_PADDING_SECONDS`
+- `TRANSCRIPTION_VAD_MAX_UTTERANCE_SECONDS`
 - `LIVE_TRANSCRIPTION_ENABLED`
 - `LIVE_TRANSCRIPTION_QUEUE_SIZE`
 - `INGEST_API_URL`
@@ -324,6 +374,7 @@ Transcription endpoint examples:
 # Host-local Faster-Whisper-compatible adapter from Compose.
 TRANSCRIPTION_API_URL=http://host.docker.internal:8000
 TRANSCRIPTION_REQUEST_MODE=json
+TRANSCRIPTION_REQUEST_OVERLAP_SECONDS=0
 
 # Optional Compose-network OpenAI-compatible transcription service.
 TRANSCRIPTION_API_URL=http://faster-whisper:8000

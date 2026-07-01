@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from contracts import TranscriptEvent
 from services.transcription import AudioInputRef, Transcriber, TranscriptionError
@@ -20,6 +20,16 @@ class TranscriptEventSink(Protocol):
 
     def __call__(self, event: TranscriptEvent) -> object | None:
         """Handle one transcript event."""
+
+
+class TranscriptEventSource(Protocol):
+    """Long-lived producer of normalized transcript events."""
+
+    def start(self) -> None:
+        """Start owned extractors, streams, and worker loops."""
+
+    def stop(self) -> None:
+        """Stop owned extractors, streams, and worker loops."""
 
 
 @dataclass(frozen=True)
@@ -63,10 +73,17 @@ class TranscriptionRuntimePump:
         sink: TranscriptEventSink,
         *,
         fail_fast: bool = False,
+        final_events_only: bool = False,
+        suppress_non_newer_final_events: bool = False,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.transcriber = transcriber
         self.sink = sink
         self.fail_fast = fail_fast
+        self.final_events_only = final_events_only
+        self.suppress_non_newer_final_events = suppress_non_newer_final_events
+        self.should_stop = should_stop or (lambda: False)
+        self._last_final_end_by_stream: dict[str, float] = {}
 
     def run_once(
         self,
@@ -79,12 +96,26 @@ class TranscriptionRuntimePump:
         failures: list[TranscriptionRuntimeFailure] = []
 
         for audio_ref in audio_refs:
+            if self.should_stop():
+                break
             processed_audio_refs += 1
             try:
                 for event in self._transcript_events(audio_ref):
+                    if self.should_stop():
+                        break
                     emitted_transcript_events += 1
+                    if self.final_events_only and not event.is_final:
+                        rejected_events += 1
+                        continue
+                    if self._is_overlap_only_event(audio_ref, event):
+                        rejected_events += 1
+                        continue
+                    if self._is_non_newer_final_event(event):
+                        rejected_events += 1
+                        continue
                     if self._emit(event):
                         accepted_events += 1
+                        self._mark_emitted(event)
                     else:
                         rejected_events += 1
             except TranscriptionError as exc:
@@ -160,6 +191,30 @@ class TranscriptionRuntimePump:
                 f"Transcript sink failed for {event.stream_id}: {exc}"
             ) from exc
 
+    def _is_overlap_only_event(
+        self,
+        audio_ref: AudioInputRef,
+        event: TranscriptEvent,
+    ) -> bool:
+        if audio_ref.emit_from_seconds is None:
+            return False
+        if event.stream_id != audio_ref.stream_id:
+            return False
+        return event.end_time_seconds <= audio_ref.emit_from_seconds
+
+    def _is_non_newer_final_event(self, event: TranscriptEvent) -> bool:
+        if not self.suppress_non_newer_final_events or not event.is_final:
+            return False
+        last_end = self._last_final_end_by_stream.get(event.stream_id)
+        return last_end is not None and event.end_time_seconds <= last_end
+
+    def _mark_emitted(self, event: TranscriptEvent) -> None:
+        if not event.is_final:
+            return
+        previous = self._last_final_end_by_stream.get(event.stream_id)
+        if previous is None or event.end_time_seconds > previous:
+            self._last_final_end_by_stream[event.stream_id] = event.end_time_seconds
+
 
 def run_transcription_pump(
     audio_refs: Iterable[AudioInputRef],
@@ -167,6 +222,8 @@ def run_transcription_pump(
     sink: TranscriptEventSink,
     *,
     fail_fast: bool = False,
+    final_events_only: bool = False,
+    suppress_non_newer_final_events: bool = False,
 ) -> TranscriptionRuntimeSummary:
     """Process supplied audio refs through a fresh pump instance."""
 
@@ -174,4 +231,6 @@ def run_transcription_pump(
         transcriber=transcriber,
         sink=sink,
         fail_fast=fail_fast,
+        final_events_only=final_events_only,
+        suppress_non_newer_final_events=suppress_non_newer_final_events,
     ).run_once(audio_refs)

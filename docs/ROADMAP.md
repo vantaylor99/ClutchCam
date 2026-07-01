@@ -65,6 +65,12 @@ Deliverables:
   default JSON-reference mode and opt-in OpenAI-compatible multipart uploads;
   the orchestrator can now use it through the live transcription source when
   enabled.
+- Optional local speech-pause source mode configured by
+  `TRANSCRIPTION_SOURCE_MODE=vad-utterance`. FFmpeg still normalizes stream
+  audio, local voice activity detection groups speech into utterance-sized
+  provider requests, and the resulting final `TranscriptEvent` values continue
+  through the same router, prefilter, AI director, and scheduler path as fixed
+  chunks.
 - `TranscriptEvent` ingestion path. `TranscriptRouter.add_event(...)` exists so
   runtime code can feed normalized events without changing the typed terminal
   input path.
@@ -157,9 +163,12 @@ FFmpeg child across late or interrupted inputs, the checkpoint validates host
 prerequisites plus Compose service state with bounded diagnostics, and the
 Linux server accepted generated RTMP for all four stable player streams. The
 checkpoint now requires every requested stream to resolve a clip. Ticket 44
-added supervised transcription FFmpeg extraction, and ticket 45 adds an opt-in
+added supervised transcription FFmpeg extraction, ticket 45 added an opt-in
 orchestrator live transcription source that feeds final transcript events into
-the existing AI/scheduler path.
+the existing AI/scheduler path, tickets 48 and 49 added fixed-chunk overlap plus
+the source-mode boundary, and ticket 49.1 added the optional local
+`vad-utterance` source. Ticket 49.2 documents how operators should compare VAD
+against fixed chunks before using it live.
 
 ## Phase 6 - Production Operations
 
@@ -243,6 +252,12 @@ Completed review tickets:
 - `tickets/complete/45-runtime-transcription-event-source.md`
 - `tickets/complete/45.5-local-linux-live-transcription-opt-in.md`
 - `tickets/complete/45.6-faster-whisper-healthcheck-python3.md`
+- `tickets/complete/46-transcript-prefilter-recent-context-boundaries.md`
+- `tickets/complete/47-per-stream-transcript-utterance-assembler.md`
+- `tickets/complete/48-overlapped-transcription-audio-windows.md`
+- `tickets/complete/49-streaming-transcription-source-boundary.md`
+- `tickets/complete/49.1-vad-utterance-audio-windows.md`
+- `tickets/complete/49.2-vad-transcription-runtime-validation-docs.md`
 
 Backlog tickets:
 

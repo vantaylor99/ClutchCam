@@ -37,14 +37,15 @@ class TranscriptEventContractTests(unittest.TestCase):
         message = TranscriptMessage(
             speaker="player_2",
             text="holy cow, look at this",
-            timestamp=42.5,
+            start_time_seconds=42.0,
+            end_time_seconds=42.5,
         )
 
         event = message.to_event()
 
         self.assertEqual(event.stream_id, "player_2")
         self.assertEqual(event.text, "holy cow, look at this")
-        self.assertEqual(event.start_time_seconds, 42.5)
+        self.assertEqual(event.start_time_seconds, 42.0)
         self.assertEqual(event.end_time_seconds, 42.5)
         self.assertTrue(event.is_final)
 

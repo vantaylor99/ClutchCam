@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,9 +17,11 @@ sys.path.insert(0, str(SRC_DIR))
 from config import get_config  # noqa: E402
 from services.transcription import (  # noqa: E402
     AudioExtractionConfig,
+    AudioInputRef,
     FFmpegAudioExtractor,
     FixtureAudioExtractor,
     TranscriptionError,
+    build_overlapped_audio_ref,
 )
 
 
@@ -97,10 +100,68 @@ class AudioExtractionConfigTests(unittest.TestCase):
         self.assertEqual(config.audio_extract_chunk_seconds, 5.0)
         self.assertEqual(config.audio_extract_codec, "pcm_s16le")
         self.assertEqual(config.audio_extract_container, "wav")
+        self.assertEqual(config.transcription_request_overlap_seconds, 0.0)
+        self.assertEqual(config.transcription_vad_frame_ms, 30)
+        self.assertEqual(config.transcription_vad_energy_threshold, 0.015)
+        self.assertEqual(config.transcription_vad_min_speech_seconds, 0.18)
+        self.assertEqual(config.transcription_vad_min_silence_seconds, 0.45)
+        self.assertEqual(config.transcription_vad_leading_padding_seconds, 0.18)
+        self.assertEqual(config.transcription_vad_trailing_padding_seconds, 0.24)
+        self.assertEqual(config.transcription_vad_max_utterance_seconds, 12.0)
         self.assertEqual(
             config.audio_input_urls["player_1"],
             "rtmp://localhost/live/player_1",
         )
+
+    def test_app_config_accepts_valid_transcription_overlap(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AUDIO_EXTRACT_CHUNK_SECONDS": "5",
+                "AUDIO_EXTRACT_CONTAINER": "wav",
+                "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "1.25",
+            },
+            clear=True,
+        ):
+            config = get_config()
+
+        self.assertEqual(config.transcription_request_overlap_seconds, 1.25)
+
+    def test_app_config_rejects_negative_transcription_overlap(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "-0.1"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS",
+            ):
+                get_config()
+
+    def test_app_config_rejects_overlap_at_or_above_chunk_duration(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AUDIO_EXTRACT_CHUNK_SECONDS": "5",
+                "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "5",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "less than"):
+                get_config()
+
+    def test_app_config_rejects_non_wav_container_when_overlap_enabled(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AUDIO_EXTRACT_CONTAINER": "mp3",
+                "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "AUDIO_EXTRACT_CONTAINER=wav"):
+                get_config()
 
     def test_audio_input_urls_fall_back_through_lookback_inputs(self) -> None:
         with patch.dict(
@@ -448,6 +509,85 @@ class FixtureAudioExtractorTests(unittest.TestCase):
             )
 
 
+class OverlappedAudioWindowBuilderTests(unittest.TestCase):
+    def test_builds_local_wav_window_with_emit_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stream_dir = root / "player_1"
+            stream_dir.mkdir()
+            previous_path = stream_dir / "000000000.wav"
+            current_path = stream_dir / "000000001.wav"
+            _write_wav(previous_path, frame_count=4, framerate=4)
+            _write_wav(current_path, frame_count=8, framerate=4)
+            config = AudioExtractionConfig(
+                output_dir=root,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+                chunk_duration_seconds=2,
+            )
+            original = AudioInputRef(
+                stream_id="player_1",
+                uri=current_path.as_uri(),
+                starts_at_seconds=2.0,
+                duration_seconds=2.0,
+                codec="pcm_s16le",
+                sample_rate_hz=4,
+                channels=1,
+            )
+
+            overlapped = build_overlapped_audio_ref(
+                audio_ref=original,
+                current_chunk_path=current_path,
+                previous_chunk_path=previous_path,
+                overlap_seconds=0.5,
+                config=config,
+            )
+
+            output_path = root / "_overlap" / "player_1" / "000000001.wav"
+
+            self.assertNotEqual(overlapped.uri, original.uri)
+            self.assertEqual(overlapped.starts_at_seconds, 1.5)
+            self.assertEqual(overlapped.duration_seconds, 2.5)
+            self.assertEqual(overlapped.emit_from_seconds, 2.0)
+            self.assertIn("/_overlap/player_1/000000001.wav", overlapped.uri.replace("\\", "/"))
+            with wave.open(str(output_path), "rb") as wav_file:
+                self.assertEqual(wav_file.getnframes(), 10)
+
+    def test_first_or_missing_previous_chunk_falls_back_to_original_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            current_path = Path(tmpdir) / "000000000.wav"
+            _write_wav(current_path, frame_count=4, framerate=4)
+            config = AudioExtractionConfig(
+                output_dir=tmpdir,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+            )
+            original = AudioInputRef(
+                stream_id="player_1",
+                uri=current_path.as_uri(),
+                starts_at_seconds=0.0,
+                duration_seconds=1.0,
+            )
+
+            first = build_overlapped_audio_ref(
+                audio_ref=original,
+                current_chunk_path=current_path,
+                previous_chunk_path=None,
+                overlap_seconds=0.5,
+                config=config,
+            )
+            missing = build_overlapped_audio_ref(
+                audio_ref=original,
+                current_chunk_path=current_path,
+                previous_chunk_path=Path(tmpdir) / "missing.wav",
+                overlap_seconds=0.5,
+                config=config,
+            )
+
+        self.assertIs(first, original)
+        self.assertIs(missing, original)
+
+
 def _wait_until(predicate, timeout_seconds: float = 1.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -455,6 +595,14 @@ def _wait_until(predicate, timeout_seconds: float = 1.0) -> bool:
             return True
         time.sleep(0.005)
     return predicate()
+
+
+def _write_wav(path: Path, *, frame_count: int, framerate: int = 8000) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
 
 
 if __name__ == "__main__":

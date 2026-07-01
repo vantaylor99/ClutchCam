@@ -251,6 +251,52 @@ class FasterWhisperTranscriberTests(unittest.TestCase):
             ),
         )
 
+    def test_text_response_without_timestamps_fails_for_overlap_request(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            post=lambda *args, **kwargs: FakeResponse({"text": "old and new"}),
+        )
+
+        with self.assertRaisesRegex(TranscriptionError, "requires timestamped"):
+            transcriber.transcribe(
+                AudioInputRef(
+                    stream_id="player_2",
+                    uri="file:///tmp/player_2.wav",
+                    starts_at_seconds=38.0,
+                    duration_seconds=7.0,
+                    emit_from_seconds=40.0,
+                )
+            )
+
+    def test_text_response_without_timestamps_uses_duration_for_vad_window(self) -> None:
+        transcriber = FasterWhisperTranscriber(
+            "http://whisper:8000",
+            post=lambda *args, **kwargs: FakeResponse({"text": "new callout"}),
+        )
+
+        events = transcriber.transcribe(
+            AudioInputRef(
+                stream_id="player_2",
+                uri="file:///tmp/player_2-vad.wav",
+                starts_at_seconds=40.0,
+                duration_seconds=3.5,
+                emit_from_seconds=40.0,
+            )
+        )
+
+        self.assertEqual(
+            events,
+            (
+                TranscriptEvent(
+                    stream_id="player_2",
+                    text="new callout",
+                    start_time_seconds=40.0,
+                    end_time_seconds=43.5,
+                    is_final=True,
+                ),
+            ),
+        )
+
     def test_openai_compatible_verbose_segments_preserve_chunk_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_path = Path(tmpdir) / "chunk.wav"
@@ -392,7 +438,128 @@ class TranscriptRouterEventTests(unittest.TestCase):
         self.assertEqual(len(recent_events), 1)
         self.assertEqual(recent_events[0].stream_id, "player_4")
         self.assertEqual(recent_events[0].text, "found the boss room")
+        self.assertEqual(recent_events[0].start_time_seconds, 10.0)
         self.assertEqual(recent_events[0].end_time_seconds, 12.0)
+
+    def test_short_gap_same_stream_events_assemble_into_candidate(self) -> None:
+        router = TranscriptRouter(history_seconds=30, max_messages=10)
+        router.add_event(TranscriptEvent("player_2", " holy ", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_2", " cow ", 11.0, 11.5))
+
+        candidates = router.get_recent_utterance_candidates()
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].stream_id, "player_2")
+        self.assertEqual(candidates[0].text, "holy cow")
+        self.assertEqual(candidates[0].start_time_seconds, 10.0)
+        self.assertEqual(candidates[0].end_time_seconds, 11.5)
+        self.assertEqual(candidates[0].source_event_count, 2)
+        self.assertEqual(candidates[0].source_start_index, 0)
+        self.assertEqual(candidates[0].source_end_index, 1)
+        self.assertEqual(router.get_recent_context_text(), "player_2: holy cow")
+        self.assertEqual(router.get_recent_candidate_events()[0].text, "holy cow")
+
+    def test_long_gap_splits_candidates_by_event_timestamps(self) -> None:
+        router = TranscriptRouter(
+            history_seconds=30,
+            max_messages=10,
+            utterance_max_gap_seconds=2.0,
+        )
+        router.add_event(TranscriptEvent("player_2", "holy", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_2", "cow", 12.6, 13.0))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["holy", "cow"],
+        )
+
+    def test_stream_change_splits_candidates(self) -> None:
+        router = TranscriptRouter(history_seconds=30, max_messages=10)
+        router.add_event(TranscriptEvent("player_1", "holy", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_2", "cow", 10.6, 11.0))
+
+        self.assertEqual(
+            [
+                (candidate.stream_id, candidate.text)
+                for candidate in router.get_recent_utterance_candidates()
+            ],
+            [("player_1", "holy"), ("player_2", "cow")],
+        )
+
+    def test_duration_bound_splits_before_overflowing_event(self) -> None:
+        router = TranscriptRouter(
+            history_seconds=30,
+            max_messages=10,
+            utterance_max_duration_seconds=2.0,
+        )
+        router.add_event(TranscriptEvent("player_1", "first", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_1", "second", 11.0, 12.5))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["first", "second"],
+        )
+
+    def test_sentence_punctuation_splits_before_next_event(self) -> None:
+        router = TranscriptRouter(history_seconds=30, max_messages=10)
+        router.add_event(TranscriptEvent("player_1", "holy cow!", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_1", "look", 10.6, 11.0))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["holy cow!", "look"],
+        )
+
+    def test_comma_does_not_split_candidates(self) -> None:
+        router = TranscriptRouter(history_seconds=30, max_messages=10)
+        router.add_event(TranscriptEvent("player_1", "holy,", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_1", "cow", 10.6, 11.0))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["holy, cow"],
+        )
+
+    def test_character_bound_splits_before_overflowing_event(self) -> None:
+        router = TranscriptRouter(
+            history_seconds=30,
+            max_messages=10,
+            utterance_max_characters=10,
+        )
+        router.add_event(TranscriptEvent("player_3", "12345", 10.0, 10.5))
+        router.add_event(TranscriptEvent("player_3", "67890", 10.6, 11.0))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["12345", "67890"],
+        )
+
+    def test_event_count_bound_splits_before_overflowing_event(self) -> None:
+        router = TranscriptRouter(
+            history_seconds=30,
+            max_messages=10,
+            utterance_max_events=2,
+        )
+        router.add_event(TranscriptEvent("player_4", "one", 10.0, 10.1))
+        router.add_event(TranscriptEvent("player_4", "two", 10.2, 10.3))
+        router.add_event(TranscriptEvent("player_4", "three", 10.4, 10.5))
+
+        self.assertEqual(
+            [candidate.text for candidate in router.get_recent_utterance_candidates()],
+            ["one two", "three"],
+        )
+
+    def test_candidates_reflect_trimmed_recent_history(self) -> None:
+        router = TranscriptRouter(history_seconds=30, max_messages=2)
+        router.add_event(TranscriptEvent("player_4", "one", 10.0, 10.1))
+        router.add_event(TranscriptEvent("player_4", "two", 10.2, 10.3))
+        router.add_event(TranscriptEvent("player_4", "three", 10.4, 10.5))
+
+        candidates = router.get_recent_utterance_candidates()
+
+        self.assertEqual([candidate.text for candidate in candidates], ["two three"])
+        self.assertEqual(candidates[0].source_start_index, 0)
+        self.assertEqual(candidates[0].source_end_index, 1)
 
     def test_add_event_rejects_unknown_streams(self) -> None:
         router = TranscriptRouter()

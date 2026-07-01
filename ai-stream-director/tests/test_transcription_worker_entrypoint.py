@@ -5,25 +5,32 @@ import sys
 import tempfile
 import threading
 import unittest
+import wave
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from contracts import TranscriptEvent  # noqa: E402
+from config import TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE, get_config  # noqa: E402
 from services.transcription import (  # noqa: E402
     AudioExtractionConfig,
     AudioInputRef,
     FixtureAudioExtractor,
     TranscriptionError,
 )
+from services.transcription_runtime import TranscriptionRuntimeFailure  # noqa: E402
 from transcription_worker import (  # noqa: E402
     CompletedAudioChunkDiscovery,
     JsonLinesTranscriptSink,
+    OverlappedAudioWindowDiscovery,
     SignalStopController,
     TranscriptionWorker,
+    VadUtteranceAudioWindowDiscovery,
+    VadUtteranceConfig,
+    build_transcription_event_source,
     build_worker,
 )
 
@@ -130,6 +137,83 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(worker.transcriber.model, "local-whisper")
         self.assertEqual(worker.transcriber.response_format, "verbose_json")
         self.assertIs(worker.stop_event, stop_event)
+        self.assertIsInstance(worker.discovery, CompletedAudioChunkDiscovery)
+
+    def test_build_worker_wraps_discovery_when_overlap_is_enabled(self) -> None:
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "AUDIO_EXTRACT_CHUNK_SECONDS": "3",
+                    "AUDIO_EXTRACT_CONTAINER": "wav",
+                    "TRANSCRIPTION_REQUEST_OVERLAP_SECONDS": "1",
+                },
+                clear=True,
+            ):
+                worker = build_worker(stdout=stream)
+
+        self.assertIsInstance(worker.discovery, OverlappedAudioWindowDiscovery)
+        self.assertEqual(worker.discovery.overlap_seconds, 1.0)
+
+    def test_build_source_accepts_vad_utterance_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "TRANSCRIPTION_SOURCE_MODE": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+                },
+                clear=True,
+            ):
+                config = get_config()
+
+        source = build_transcription_event_source(app_config=config)
+
+        self.assertIsInstance(source, TranscriptionWorker)
+        self.assertIsInstance(source.discovery, VadUtteranceAudioWindowDiscovery)
+
+    def test_vad_utterance_incompatible_extraction_points_to_chunked_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "TRANSCRIPTION_SOURCE_MODE": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "AUDIO_EXTRACT_CONTAINER": "mp3",
+                },
+                clear=True,
+            ):
+                config = get_config()
+
+        with self.assertRaisesRegex(
+            TranscriptionError,
+            "TRANSCRIPTION_SOURCE_MODE=chunked",
+        ):
+            build_transcription_event_source(app_config=config)
+
+    def test_chunked_source_start_and_stop_wrap_worker_lifecycle(self) -> None:
+        stop_event = threading.Event()
+        extractor = FakeExtractor()
+        source = TranscriptionWorker(
+            extraction_config=AudioExtractionConfig(
+                output_dir="audio-cache",
+                stream_input_urls={"player_1": "x"},
+                stream_ids=("player_1",),
+            ),
+            extractor=extractor,
+            transcriber=FakeTranscriber([]),
+            sink=lambda event: event,
+            discovery=FakeDiscovery(),
+            stop_event=stop_event,
+            wait=lambda seconds: stop_event.is_set(),
+        )
+        source.stop()
+        source.start()
+
+        self.assertEqual(extractor.starts, 1)
+        self.assertEqual(extractor.stops, 1)
 
     def test_completed_chunk_discovery_deduplicates_processed_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -154,6 +238,118 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(first_ready_pass[0].stream_id, "player_1")
         self.assertEqual(first_ready_pass[0].starts_at_seconds, 10.0)
         self.assertEqual(second_ready_pass, ())
+
+    def test_completed_chunk_discovery_can_ignore_existing_chunks_on_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stream_dir = Path(tmpdir) / "player_1"
+            stream_dir.mkdir()
+            old_chunk_path = stream_dir / "000000002.wav"
+            old_chunk_path.write_bytes(b"old audio")
+            config = AudioExtractionConfig(
+                output_dir=tmpdir,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+                chunk_duration_seconds=5,
+            )
+            extractor = FixtureAudioExtractor(config)
+            discovery = CompletedAudioChunkDiscovery(
+                config,
+                extractor,
+                skip_existing=True,
+            )
+            old_chunk_path.write_bytes(b"new audio with reused path")
+
+            first_pass = discovery.discover()
+            second_pass = discovery.discover()
+
+        self.assertEqual(first_pass, ())
+        self.assertEqual(len(second_pass), 1)
+        self.assertEqual(second_pass[0].uri, old_chunk_path.resolve().as_uri())
+
+    def test_overlap_discovery_builds_windows_after_first_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stream_dir = root / "player_1"
+            stream_dir.mkdir()
+            first_path = stream_dir / "000000000.wav"
+            second_path = stream_dir / "000000001.wav"
+            _write_wav(first_path, frame_count=8, framerate=4)
+            _write_wav(second_path, frame_count=8, framerate=4)
+            config = AudioExtractionConfig(
+                output_dir=root,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+                chunk_duration_seconds=2,
+            )
+            discovery = OverlappedAudioWindowDiscovery(
+                FakeDiscovery(
+                    (
+                        AudioInputRef(
+                            stream_id="player_1",
+                            uri=first_path.as_uri(),
+                            starts_at_seconds=0.0,
+                            duration_seconds=2.0,
+                        ),
+                        AudioInputRef(
+                            stream_id="player_1",
+                            uri=second_path.as_uri(),
+                            starts_at_seconds=2.0,
+                            duration_seconds=2.0,
+                        ),
+                    )
+                ),
+                config=config,
+                overlap_seconds=0.5,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(refs[0].uri, first_path.as_uri())
+        self.assertNotEqual(refs[1].uri, second_path.as_uri())
+        self.assertEqual(refs[1].starts_at_seconds, 1.5)
+        self.assertEqual(refs[1].duration_seconds, 2.5)
+        self.assertEqual(refs[1].emit_from_seconds, 2.0)
+        self.assertIn("/_overlap/player_1/000000001.wav", refs[1].uri.replace("\\", "/"))
+
+    def test_overlap_discovery_deletes_stale_composed_files_on_later_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stream_dir = root / "player_1"
+            stream_dir.mkdir()
+            first_path = stream_dir / "000000000.wav"
+            second_path = stream_dir / "000000001.wav"
+            _write_wav(first_path, frame_count=8, framerate=4)
+            _write_wav(second_path, frame_count=8, framerate=4)
+            base = FakeDiscovery(
+                (
+                    AudioInputRef(
+                        stream_id="player_1",
+                        uri=second_path.as_uri(),
+                        starts_at_seconds=2.0,
+                        duration_seconds=2.0,
+                    ),
+                )
+            )
+            discovery = OverlappedAudioWindowDiscovery(
+                base,
+                config=AudioExtractionConfig(
+                    output_dir=root,
+                    stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                    stream_ids=("player_1",),
+                    chunk_duration_seconds=2,
+                ),
+                overlap_seconds=0.5,
+            )
+            refs = discovery.discover()
+            overlap_path = root / "_overlap" / "player_1" / "000000001.wav"
+            self.assertTrue(overlap_path.exists())
+
+            base.refs = ()
+            later_refs = discovery.discover()
+
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(later_refs, ())
+            self.assertFalse(overlap_path.exists())
 
     def test_per_chunk_failure_isolation_emits_failure_and_later_event(self) -> None:
         stream = io.StringIO()
@@ -225,6 +421,49 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
             },
         )
 
+    def test_configured_jsonl_sink_includes_selected_transcription_modes(self) -> None:
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "AUDIO_EXTRACT_DIR": tmpdir,
+                    "TRANSCRIPTION_REQUEST_MODE": "openai-compatible",
+                    "TRANSCRIPTION_SOURCE_MODE": TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+                },
+                clear=True,
+            ):
+                config = get_config()
+
+        source = build_transcription_event_source(app_config=config, stdout=stream)
+
+        source.sink(
+            TranscriptEvent(
+                stream_id="player_4",
+                text="found it",
+                start_time_seconds=12.5,
+                end_time_seconds=14.0,
+            )
+        )
+        source.failure_sink(
+            TranscriptionRuntimeFailure(
+                audio_ref=audio_ref("player_4"),
+                error=TranscriptionError("endpoint unavailable"),
+            )
+        )
+
+        event_payload, failure_payload = [
+            json.loads(line) for line in stream.getvalue().splitlines()
+        ]
+        for payload in (event_payload, failure_payload):
+            self.assertEqual(
+                payload["transcription_source_mode"],
+                TRANSCRIPTION_SOURCE_MODE_VAD_UTTERANCE,
+            )
+            self.assertEqual(payload["transcription_request_mode"], "openai-compatible")
+        self.assertEqual(event_payload["type"], "transcript_event")
+        self.assertEqual(failure_payload["type"], "transcription_failure")
+
     def test_signal_stop_request_allows_worker_cleanup(self) -> None:
         stop_event = threading.Event()
         stop_controller = SignalStopController(stop_event=stop_event, signals=())
@@ -268,6 +507,193 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
 
         self.assertEqual(extractor.starts, 1)
         self.assertEqual(extractor.stops, 1)
+
+
+class VadUtteranceAudioWindowDiscoveryTests(unittest.TestCase):
+    def test_silence_only_input_does_not_emit_provider_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(chunk, [0] * 20, framerate=10)
+            discovery = self._discovery(root, (self._ref(chunk, 0.0),))
+
+            refs = discovery.discover()
+
+        self.assertEqual(refs, ())
+
+    def test_trailing_silence_finalizes_speech_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(
+                chunk,
+                [0, 0, 10000, 10000, 10000, 0, 0, 0],
+                framerate=10,
+            )
+            discovery = self._discovery(root, (self._ref(chunk, 0.0),))
+
+            refs = discovery.discover()
+
+            self.assertEqual(len(refs), 1)
+            self.assertEqual(refs[0].starts_at_seconds, 0.1)
+            self.assertAlmostEqual(refs[0].duration_seconds, 0.6)
+            self.assertEqual(refs[0].sample_rate_hz, 10)
+            self.assertEqual(refs[0].channels, 1)
+            self.assertIn("/_vad/player_1/", refs[0].uri.replace("\\", "/"))
+            output_path = next((root / "_vad" / "player_1").glob("*.wav"))
+            with wave.open(str(output_path), "rb") as wav_file:
+                self.assertEqual(wav_file.getnframes(), 6)
+
+    def test_long_speech_finalizes_at_max_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            chunk = root / "000000000.wav"
+            _write_pcm_wav(chunk, [12000] * 10, framerate=10)
+            discovery = self._discovery(
+                root,
+                (self._ref(chunk, 0.0),),
+                vad_config=VadUtteranceConfig(
+                    frame_seconds=0.1,
+                    energy_threshold=0.01,
+                    min_speech_seconds=0.1,
+                    min_silence_seconds=0.2,
+                    leading_padding_seconds=0,
+                    trailing_padding_seconds=0,
+                    max_utterance_seconds=0.5,
+                ),
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 2)
+        self.assertEqual([ref.duration_seconds for ref in refs], [0.5, 0.5])
+
+    def test_unreadable_or_incompatible_wav_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bad = root / "000000000.wav"
+            good = root / "000000001.wav"
+            bad.write_bytes(b"not wav")
+            _write_pcm_wav(good, [12000, 12000, 0, 0], framerate=10)
+            discovery = self._discovery(
+                root,
+                (self._ref(bad, 0.0), self._ref(good, 0.4)),
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+
+    def test_unreadable_chunk_resets_active_speech_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first = root / "000000000.wav"
+            bad = root / "000000001.wav"
+            later = root / "000000002.wav"
+            _write_pcm_wav(first, [12000, 12000], framerate=10)
+            bad.write_bytes(b"not wav")
+            _write_pcm_wav(later, [12000, 12000, 0, 0], framerate=10)
+            logger = Mock()
+            discovery = self._discovery(
+                root,
+                (
+                    self._ref(first, 0.0),
+                    self._ref(bad, 0.2),
+                    self._ref(later, 0.4),
+                ),
+                logger=logger,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+        logger.warning.assert_called()
+
+    def test_empty_wav_chunk_is_skipped_with_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            empty = root / "000000000.wav"
+            good = root / "000000001.wav"
+            _write_pcm_wav(empty, [], framerate=10)
+            _write_pcm_wav(good, [12000, 12000, 0, 0], framerate=10)
+            logger = Mock()
+            discovery = self._discovery(
+                root,
+                (self._ref(empty, 0.0), self._ref(good, 0.4)),
+                logger=logger,
+            )
+
+            refs = discovery.discover()
+
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0].starts_at_seconds, 0.4)
+        self.assertTrue(
+            any(
+                "Empty VAD WAV chunk" in str(call.args)
+                for call in logger.warning.call_args_list
+            )
+        )
+
+    def _discovery(
+        self,
+        root: Path,
+        refs: tuple[AudioInputRef, ...],
+        *,
+        vad_config: VadUtteranceConfig | None = None,
+        logger: Mock | None = None,
+    ) -> VadUtteranceAudioWindowDiscovery:
+        extraction_config = AudioExtractionConfig(
+            output_dir=root,
+            stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+            stream_ids=("player_1",),
+            sample_rate_hz=10,
+            chunk_duration_seconds=1,
+        )
+        return VadUtteranceAudioWindowDiscovery(
+            FakeDiscovery(refs),
+            extraction_config=extraction_config,
+            vad_config=vad_config
+            or VadUtteranceConfig(
+                frame_seconds=0.1,
+                energy_threshold=0.01,
+                min_speech_seconds=0.2,
+                min_silence_seconds=0.2,
+                leading_padding_seconds=0.1,
+                trailing_padding_seconds=0.2,
+                max_utterance_seconds=1.0,
+            ),
+            logger=logger or Mock(),
+        )
+
+    def _ref(self, path: Path, starts_at_seconds: float) -> AudioInputRef:
+        return AudioInputRef(
+            stream_id="player_1",
+            uri=path.resolve().as_uri(),
+            starts_at_seconds=starts_at_seconds,
+            duration_seconds=1.0,
+            codec="pcm_s16le",
+            sample_rate_hz=10,
+            channels=1,
+        )
+
+def _write_wav(path: Path, *, frame_count: int, framerate: int = 8000) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
+
+
+def _write_pcm_wav(path: Path, samples: list[int], *, framerate: int) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(
+            b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+        )
 
 
 if __name__ == "__main__":
