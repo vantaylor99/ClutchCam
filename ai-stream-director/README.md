@@ -116,6 +116,11 @@ OBS 28+ includes OBS WebSocket by default.
 
 If you are running the Python app in Docker Desktop on Windows or macOS, `OBS_HOST=host.docker.internal` should work. If you run the app directly on your machine without Docker, use `OBS_HOST=127.0.0.1`.
 
+For the first real-OBS checkpoint, follow
+[docs/runbooks/real-obs-connection.md](../docs/runbooks/real-obs-connection.md)
+and keep real ingest, live transcription, and AI switching disabled until the
+connection-only preflight passes.
+
 ## Setup
 
 From this directory:

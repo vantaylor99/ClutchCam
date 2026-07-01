@@ -291,6 +291,10 @@ COMPOSE_PROFILES=local-linux \
 docker compose run --rm orchestrator
 ```
 
+For the connection-only checkpoint and its acceptance evidence checklist, see
+[Real OBS connection checkpoint](real-obs-connection.md). Keep real ingest,
+live transcription, and AI switching disabled for that pass.
+
 ## Player Stream Publishing
 
 Stable stream IDs are:
@@ -587,6 +591,9 @@ OBS WebSocket issue:
   missing scenes.
 - Recover: enable OBS WebSocket, check `OBS_HOST`, `OBS_PORT`, and
   `OBS_PASSWORD`, and verify all five scene names exactly.
+- For a repeatable connection-only pass, follow the
+  [Real OBS connection checkpoint](real-obs-connection.md) checklist from the
+  same runtime shape that will later run the orchestrator.
 - Use `DRY_RUN_OBS=true` for stack smoke tests that do not require OBS.
 
 Buffered OBS playback unavailable:

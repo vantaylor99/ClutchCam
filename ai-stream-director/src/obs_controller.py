@@ -1,7 +1,16 @@
 import importlib
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
+
+
+@dataclass(frozen=True)
+class OBSPreflightSummary:
+    obs_version: str
+    current_program_scene: str
+    scenes: tuple[str, ...]
+    missing_required_scenes: tuple[str, ...]
 
 
 class OBSController:
@@ -11,6 +20,7 @@ class OBSController:
         self.password = password
         self.client: Optional[Any] = None
         self._log = log
+        self._obs_version: str | None = None
 
     def connect(self) -> None:
         obs = _load_obs_module()
@@ -21,7 +31,8 @@ class OBSController:
             timeout=3,
         )
         version = self.client.get_version()
-        self._log(f"Connected to OBS WebSocket. OBS version: {version.obs_version}")
+        self._obs_version = _obs_version(version)
+        self._log(f"Connected to OBS WebSocket. OBS version: {self._obs_version}")
 
     def set_scene(self, scene_name: str) -> None:
         self._require_client().set_current_program_scene(scene_name)
@@ -49,6 +60,13 @@ class OBSController:
     def get_current_scene(self) -> str:
         result = self._require_client().get_current_program_scene()
         return result.current_program_scene_name
+
+    def get_obs_version(self) -> str:
+        if self._obs_version is not None:
+            return self._obs_version
+        version = self._require_client().get_version()
+        self._obs_version = _obs_version(version)
+        return self._obs_version
 
     def _require_client(self) -> Any:
         if self.client is None:
@@ -78,6 +96,47 @@ def _scene_name(scene) -> str:
         return str(scene_name)
 
     return str(getattr(scene, "scene_name", ""))
+
+
+def _obs_version(response: Any) -> str:
+    if isinstance(response, dict):
+        version = response.get("obsVersion") or response.get("obs_version")
+        if version is not None:
+            return str(version)
+
+    version = getattr(response, "obs_version", None)
+    if version is not None:
+        return str(version)
+
+    version = getattr(response, "obsVersion", None)
+    if version is not None:
+        return str(version)
+
+    return ""
+
+
+def find_missing_scenes(
+    available_scenes: Iterable[str],
+    required_scenes: Iterable[str],
+) -> list[str]:
+    available = set(available_scenes)
+    return [scene_name for scene_name in required_scenes if scene_name not in available]
+
+
+def collect_obs_preflight(
+    controller: "OBSController | DryRunOBSController",
+    *,
+    required_scenes: Iterable[str],
+) -> OBSPreflightSummary:
+    scenes = tuple(controller.list_scenes())
+    return OBSPreflightSummary(
+        obs_version=controller.get_obs_version(),
+        current_program_scene=controller.get_current_scene(),
+        scenes=scenes,
+        missing_required_scenes=tuple(
+            find_missing_scenes(scenes, required_scenes)
+        ),
+    )
 
 
 def _media_source_settings(media_uri: str) -> dict[str, Any]:
@@ -156,6 +215,14 @@ class DryRunOBSController:
     def get_current_scene(self) -> str:
         self._require_connection()
         return self.current_scene
+
+    def get_obs_version(self) -> str:
+        self._require_connection()
+        return "dry-run"
+
+    def list_scenes(self) -> list[str]:
+        self._require_connection()
+        return [self.current_scene]
 
     def _require_connection(self) -> None:
         if not self.connected:

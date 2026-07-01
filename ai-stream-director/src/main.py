@@ -2,14 +2,18 @@ import queue
 import sys
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TextIO
 
 from ai_director import AIDirector, AIDirectorError, DirectorDecision
 from config import SCENES, AppConfig, get_config
 from contracts import HypeSignal, SwitcherTarget, TranscriptEvent
-from obs_controller import DryRunOBSController, OBSController
+from obs_controller import (
+    DryRunOBSController,
+    OBSController,
+    collect_obs_preflight,
+)
 from scheduler import MANUAL_COMMAND_SCENES, SceneScheduler
 from services.ai import (
     HypeContext,
@@ -316,13 +320,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         obs_controller.connect()
         if not config.dry_run_obs:
-            missing_scenes = find_missing_scenes(
-                available_scenes=obs_controller.list_scenes(),
+            preflight = collect_obs_preflight(
+                obs_controller,
                 required_scenes=SCENES.values(),
             )
-            if missing_scenes:
+            if preflight.missing_required_scenes:
                 print("OBS is missing required scenes:")
-                for scene_name in missing_scenes:
+                for scene_name in preflight.missing_required_scenes:
                     print(f"  - {scene_name}")
                 print("Create or rename the OBS scenes so they match exactly.")
                 return 1
@@ -370,16 +374,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         transcript_log_text_max_characters=config.transcript_log_text_max_characters,
         log=terminal_output.log,
     )
-
-
-def find_missing_scenes(
-    available_scenes: Iterable[str],
-    required_scenes: Iterable[str],
-) -> list[str]:
-    available = set(available_scenes)
-    return [scene_name for scene_name in required_scenes if scene_name not in available]
-
-
 def build_live_transcription_source(
     config: AppConfig,
     *,

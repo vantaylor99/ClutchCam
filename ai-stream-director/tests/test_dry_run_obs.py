@@ -24,8 +24,13 @@ from config import (  # noqa: E402
     redact_secrets,
 )
 from ai_director import DirectorDecision  # noqa: E402
-from main import TerminalOutput, find_missing_scenes, process_line  # noqa: E402
-from obs_controller import DryRunOBSController, OBSController  # noqa: E402
+from main import TerminalOutput, process_line  # noqa: E402
+from obs_controller import (  # noqa: E402
+    DryRunOBSController,
+    OBSController,
+    collect_obs_preflight,
+    find_missing_scenes,
+)
 from scheduler import SceneScheduler  # noqa: E402
 from transcript_router import TranscriptRouter  # noqa: E402
 
@@ -464,6 +469,47 @@ class OBSControllerSceneListTests(unittest.TestCase):
         self.assertEqual(
             controller.list_scenes(),
             [SCENES["quad"], SCENES["player_1"]],
+        )
+
+    def test_get_obs_version_uses_cached_connect_result(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        controller._obs_version = "30.2.3"
+
+        self.assertEqual(controller.get_obs_version(), "30.2.3")
+        controller.client.get_version.assert_not_called()
+
+    def test_collect_obs_preflight_reads_version_scene_and_missing_required(self) -> None:
+        controller = OBSController(host="localhost", port=4455, password="")
+        controller.client = Mock()
+        version_response = Mock()
+        version_response.obs_version = "30.2.3"
+        controller.client.get_version.return_value = version_response
+        current_scene_response = Mock()
+        current_scene_response.current_program_scene_name = SCENES["player_2"]
+        controller.client.get_current_program_scene.return_value = current_scene_response
+        scene_list_response = Mock()
+        scene_list_response.scenes = [
+            {"sceneName": SCENES["quad"]},
+            {"sceneName": SCENES["player_2"]},
+            {"sceneName": SCENES["player_4"]},
+        ]
+        controller.client.get_scene_list.return_value = scene_list_response
+
+        preflight = collect_obs_preflight(
+            controller,
+            required_scenes=SCENES.values(),
+        )
+
+        self.assertEqual(preflight.obs_version, "30.2.3")
+        self.assertEqual(preflight.current_program_scene, SCENES["player_2"])
+        self.assertEqual(
+            preflight.scenes,
+            (SCENES["quad"], SCENES["player_2"], SCENES["player_4"]),
+        )
+        self.assertEqual(
+            preflight.missing_required_scenes,
+            (SCENES["player_1"], SCENES["player_3"]),
         )
 
     def test_set_media_source_updates_file_uri_input_settings(self) -> None:

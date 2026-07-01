@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,7 @@ sys.path.insert(0, str(SRC_DIR))
 from scripts import smoke_ai_endpoint  # noqa: E402
 from scripts import smoke_buffer_worker  # noqa: E402
 from scripts import smoke_media_server  # noqa: E402
+from scripts import smoke_obs_connection  # noqa: E402
 from scripts import smoke_orchestrator_dry_run  # noqa: E402
 from scripts import smoke_transcription_api  # noqa: E402
 
@@ -359,6 +362,251 @@ class SmokeAIEndpointTests(unittest.TestCase):
         self.assertNotIn(secret, payload)
 
 
+class SmokeOBSConnectionTests(unittest.TestCase):
+    def test_obs_connection_smoke_reports_read_only_obs_state(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                self.host = host
+                self.port = port
+                self.password = password
+                self.log = log
+
+            def connect(self) -> None:
+                return None
+
+            def get_obs_version(self) -> str:
+                return "30.2.3"
+
+            def get_current_scene(self) -> str:
+                return "Quad View"
+
+            def list_scenes(self) -> list[str]:
+                return [
+                    "Quad View",
+                    "Player 1 Fullscreen",
+                    "Player 2 Fullscreen",
+                    "Player 3 Fullscreen",
+                    "Player 4 Fullscreen",
+                ]
+
+            def set_scene(self, scene_name: str) -> None:
+                raise AssertionError(f"preflight must not switch scenes: {scene_name}")
+
+            def set_media_source(self, source_name: str, media_uri: str) -> None:
+                raise AssertionError(
+                    "preflight must not mutate media sources: "
+                    f"{source_name} -> {media_uri}"
+                )
+
+        result = smoke_obs_connection.smoke_obs_connection(
+            {
+                "OBS_HOST": "obs.local",
+                "OBS_PORT": "4460",
+                "OBS_PASSWORD": "super-secret",
+                "DRY_RUN_OBS": "false",
+            },
+            controller_factory=FakeController,
+        )
+
+        self.assertEqual(result.host, "obs.local")
+        self.assertEqual(result.port, 4460)
+        self.assertFalse(result.dry_run_obs)
+        self.assertTrue(result.password_configured)
+        self.assertEqual(result.obs_version, "30.2.3")
+        self.assertEqual(result.current_program_scene, "Quad View")
+        self.assertEqual(result.missing_required_scenes, ())
+        payload = json.dumps(asdict(result), sort_keys=True)
+        self.assertNotIn("super-secret", payload)
+
+    def test_obs_connection_smoke_reads_process_environment_by_default(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                self.host = host
+                self.port = port
+                self.password = password
+                self.log = log
+
+            def connect(self) -> None:
+                return None
+
+            def get_obs_version(self) -> str:
+                return "30.2.3"
+
+            def get_current_scene(self) -> str:
+                return "Quad View"
+
+            def list_scenes(self) -> list[str]:
+                return [
+                    "Quad View",
+                    "Player 1 Fullscreen",
+                    "Player 2 Fullscreen",
+                    "Player 3 Fullscreen",
+                    "Player 4 Fullscreen",
+                ]
+
+        with patch.dict(
+            os.environ,
+            {
+                "OBS_HOST": "127.0.0.1",
+                "OBS_PORT": "4455",
+                "OBS_PASSWORD": "super-secret",
+                "DRY_RUN_OBS": "false",
+            },
+            clear=True,
+        ):
+            result = smoke_obs_connection.smoke_obs_connection(
+                controller_factory=FakeController,
+            )
+
+        self.assertEqual(result.host, "127.0.0.1")
+        self.assertEqual(result.port, 4455)
+        self.assertTrue(result.password_configured)
+        self.assertFalse(result.dry_run_obs)
+
+    def test_obs_connection_smoke_suppresses_controller_logs(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                self.host = host
+                self.port = port
+                self.password = password
+                self.log = log
+
+            def connect(self) -> None:
+                self.log("Connected to OBS WebSocket. OBS version: 30.2.3")
+
+            def get_obs_version(self) -> str:
+                return "30.2.3"
+
+            def get_current_scene(self) -> str:
+                return "Quad View"
+
+            def list_scenes(self) -> list[str]:
+                return [
+                    "Quad View",
+                    "Player 1 Fullscreen",
+                    "Player 2 Fullscreen",
+                    "Player 3 Fullscreen",
+                    "Player 4 Fullscreen",
+                ]
+
+        stdout = io.StringIO()
+        with (
+            redirect_stdout(stdout),
+        ):
+            result = smoke_obs_connection.smoke_obs_connection(
+                {
+                    "OBS_HOST": "obs.local",
+                    "OBS_PORT": "4455",
+                    "OBS_PASSWORD": "super-secret",
+                    "DRY_RUN_OBS": "false",
+                },
+                controller_factory=FakeController,
+            )
+
+        self.assertEqual(result.host, "obs.local")
+        self.assertEqual(result.obs_version, "30.2.3")
+        self.assertNotIn("Connected to OBS WebSocket", stdout.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
+
+    def test_obs_connection_smoke_suppresses_client_output_on_failure(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                del host, port, password, log
+
+            def connect(self) -> None:
+                print("raw stdout from OBS client")
+                print("raw stderr from OBS client", file=sys.stderr)
+                raise RuntimeError("connection refused")
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaisesRegex(
+                smoke_obs_connection.SmokeFailure,
+                "connection refused",
+            ),
+        ):
+            smoke_obs_connection.smoke_obs_connection(
+                {
+                    "OBS_HOST": "obs.local",
+                    "OBS_PORT": "4455",
+                    "OBS_PASSWORD": "super-secret",
+                    "DRY_RUN_OBS": "false",
+                },
+                controller_factory=FakeController,
+            )
+
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_obs_connection_smoke_fails_when_required_scenes_are_missing(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                del host, port, password, log
+
+            def connect(self) -> None:
+                return None
+
+            def get_obs_version(self) -> str:
+                return "30.2.3"
+
+            def get_current_scene(self) -> str:
+                return "Quad View"
+
+            def list_scenes(self) -> list[str]:
+                return ["Quad View", "Player 1 Fullscreen"]
+
+        with self.assertRaisesRegex(
+            smoke_obs_connection.SmokeFailure,
+            "missing required scenes.*Player 2 Fullscreen",
+        ) as raised:
+            smoke_obs_connection.smoke_obs_connection(
+                {
+                    "OBS_HOST": "obs.local",
+                    "OBS_PORT": "4455",
+                    "OBS_PASSWORD": "super-secret",
+                    "DRY_RUN_OBS": "false",
+                },
+                controller_factory=FakeController,
+            )
+
+        self.assertNotIn("super-secret", str(raised.exception))
+
+    def test_obs_connection_smoke_fails_when_connection_cannot_be_opened(self) -> None:
+        class FakeController:
+            def __init__(self, *, host, port, password, log=print) -> None:
+                del host, port, password, log
+
+            def connect(self) -> None:
+                raise RuntimeError("authentication failed")
+
+        with self.assertRaisesRegex(
+            smoke_obs_connection.SmokeFailure,
+            "password_configured=true",
+        ) as raised:
+            smoke_obs_connection.smoke_obs_connection(
+                {
+                    "OBS_HOST": "obs.local",
+                    "OBS_PORT": "4455",
+                    "OBS_PASSWORD": "super-secret",
+                    "DRY_RUN_OBS": "false",
+                },
+                controller_factory=FakeController,
+            )
+
+        self.assertIn("authentication failed", str(raised.exception))
+        self.assertNotIn("super-secret", str(raised.exception))
+
+    def test_obs_connection_smoke_rejects_dry_run_mode(self) -> None:
+        with self.assertRaisesRegex(
+            smoke_obs_connection.SmokeFailure,
+            "DRY_RUN_OBS=false",
+        ):
+            smoke_obs_connection.smoke_obs_connection({"DRY_RUN_OBS": "true"})
+
+
 class SmokeOrchestratorDryRunTests(unittest.TestCase):
     def test_orchestrator_env_forces_dry_run_and_fake_ai_endpoint(self) -> None:
         env = smoke_orchestrator_dry_run.build_subprocess_env(
@@ -434,6 +682,7 @@ for name in (
     "scripts.smoke_buffer_worker",
     "scripts.smoke_transcription_api",
     "scripts.smoke_ai_endpoint",
+    "scripts.smoke_obs_connection",
     "scripts.smoke_orchestrator_dry_run",
 ):
     importlib.import_module(name)
