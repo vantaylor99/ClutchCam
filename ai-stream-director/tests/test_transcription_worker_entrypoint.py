@@ -239,6 +239,34 @@ class TranscriptionWorkerEntrypointTests(unittest.TestCase):
         self.assertEqual(first_ready_pass[0].starts_at_seconds, 10.0)
         self.assertEqual(second_ready_pass, ())
 
+    def test_completed_chunk_discovery_can_ignore_existing_chunks_on_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stream_dir = Path(tmpdir) / "player_1"
+            stream_dir.mkdir()
+            old_chunk_path = stream_dir / "000000002.wav"
+            old_chunk_path.write_bytes(b"old audio")
+            config = AudioExtractionConfig(
+                output_dir=tmpdir,
+                stream_input_urls={"player_1": "rtmp://media/live/player_1"},
+                stream_ids=("player_1",),
+                chunk_duration_seconds=5,
+            )
+            extractor = FixtureAudioExtractor(config)
+            discovery = CompletedAudioChunkDiscovery(
+                config,
+                extractor,
+                skip_existing=True,
+            )
+            new_chunk_path = stream_dir / "000000003.wav"
+            new_chunk_path.write_bytes(b"new audio")
+
+            first_pass = discovery.discover()
+            second_pass = discovery.discover()
+
+        self.assertEqual(first_pass, ())
+        self.assertEqual(len(second_pass), 1)
+        self.assertEqual(second_pass[0].uri, new_chunk_path.resolve().as_uri())
+
     def test_overlap_discovery_builds_windows_after_first_chunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

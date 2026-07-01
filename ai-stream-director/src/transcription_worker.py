@@ -160,12 +160,15 @@ class CompletedAudioChunkDiscovery:
         extractor: AudioExtractor,
         *,
         require_stable_snapshot: bool = True,
+        skip_existing: bool = False,
     ) -> None:
         self.config = config
         self.extractor = extractor
         self.require_stable_snapshot = require_stable_snapshot
         self._pending: dict[Path, _ChunkSnapshot] = {}
         self._processed: set[Path] = set()
+        if skip_existing:
+            self._processed.update(self._existing_chunk_paths())
 
     def discover(self) -> tuple[AudioInputRef, ...]:
         audio_refs: list[AudioInputRef] = []
@@ -229,6 +232,19 @@ class CompletedAudioChunkDiscovery:
                 self.config.chunk_duration_seconds,
             ),
         )
+
+    def _existing_chunk_paths(self) -> set[Path]:
+        paths: set[Path] = set()
+        for stream_id in self.config.stream_ids:
+            stream_dir = self.config.output_dir / stream_id
+            if not stream_dir.exists():
+                continue
+            for chunk_path in stream_dir.glob(f"*.{self.config.container}"):
+                try:
+                    paths.add(chunk_path.resolve())
+                except FileNotFoundError:
+                    continue
+        return paths
 
 
 class OverlappedAudioWindowDiscovery:
@@ -758,6 +774,7 @@ def build_transcription_event_source(
     discovery: AudioChunkDiscovery = CompletedAudioChunkDiscovery(
         extraction_config,
         extractor,
+        skip_existing=True,
     )
     final_events_only = False
     suppress_non_newer_final_events = False
