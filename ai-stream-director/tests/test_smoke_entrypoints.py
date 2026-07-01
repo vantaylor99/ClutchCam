@@ -176,11 +176,44 @@ class SmokeTranscriptionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(result.endpoint_url, "http://whisper.test:9000/transcribe")
+        self.assertEqual(result.request_mode, "json")
         self.assertEqual(result.event_count, 0)
         self.assertEqual(calls[0][0], "http://whisper.test:9000/transcribe")
         self.assertEqual(calls[0][1]["timeout"], 4.5)
         self.assertEqual(calls[0][1]["json"]["stream_id"], "player_4")
         self.assertEqual(calls[0][1]["json"]["audio_uri"], "file:///fixture.wav")
+
+    def test_transcription_smoke_supports_openai_compatible_uploads(self) -> None:
+        calls = []
+
+        def post(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse({"segments": []})
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "fixture.wav"
+            audio_path.write_bytes(b"audio")
+
+            result = smoke_transcription_api.smoke_transcription_api(
+                {
+                    "TRANSCRIPTION_API_URL": "http://whisper.test:9000",
+                    "TRANSCRIPTION_REQUEST_MODE": "openai-compatible",
+                    "TRANSCRIPTION_MODEL": "local-whisper",
+                    "TRANSCRIPTION_RESPONSE_FORMAT": "verbose_json",
+                    "SMOKE_TRANSCRIPTION_AUDIO_URI": audio_path.as_uri(),
+                },
+                post=post,
+            )
+
+        self.assertEqual(
+            result.endpoint_url,
+            "http://whisper.test:9000/v1/audio/transcriptions",
+        )
+        self.assertEqual(result.request_mode, "openai-compatible")
+        self.assertEqual(calls[0][0], "http://whisper.test:9000/v1/audio/transcriptions")
+        self.assertEqual(calls[0][1]["data"]["model"], "local-whisper")
+        self.assertEqual(calls[0][1]["data"]["response_format"], "verbose_json")
+        self.assertIn("file", calls[0][1]["files"])
 
     def test_transcription_smoke_surfaces_failed_request(self) -> None:
         def post(url, **kwargs):

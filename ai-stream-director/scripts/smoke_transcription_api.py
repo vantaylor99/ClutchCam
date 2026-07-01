@@ -17,6 +17,10 @@ SRC_DIR = PROJECT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from config import (  # noqa: E402
+    TRANSCRIPTION_REQUEST_MODE_JSON,
+    normalize_transcription_request_mode,
+)
 from services.transcription import (  # noqa: E402
     AudioInputRef,
     FasterWhisperTranscriber,
@@ -33,6 +37,7 @@ class TranscriptionSmokeResult:
     endpoint_url: str
     audio_uri: str
     stream_id: str
+    request_mode: str
     timeout_seconds: float
     event_count: int
 
@@ -66,6 +71,9 @@ def smoke_transcription_api(
     post: Callable[..., Any] | None = None,
 ) -> TranscriptionSmokeResult:
     api_url = env.get("TRANSCRIPTION_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    request_mode = normalize_transcription_request_mode(
+        env.get("TRANSCRIPTION_REQUEST_MODE", TRANSCRIPTION_REQUEST_MODE_JSON)
+    )
     timeout_seconds = _env_float(
         env,
         "SMOKE_TRANSCRIPTION_TIMEOUT_SECONDS",
@@ -89,19 +97,29 @@ def smoke_transcription_api(
         transcriber = FasterWhisperTranscriber(
             api_url,
             timeout_seconds=timeout_seconds,
+            request_mode=request_mode,
+            endpoint_path=env.get("TRANSCRIPTION_ENDPOINT_PATH") or None,
+            model=env.get(
+                "TRANSCRIPTION_MODEL",
+                env.get("FASTER_WHISPER_MODEL", "Systran/faster-whisper-small"),
+            ),
+            language=env.get("TRANSCRIPTION_LANGUAGE", ""),
+            response_format=env.get("TRANSCRIPTION_RESPONSE_FORMAT", "json"),
             post=post,
         )
+        endpoint_url = f"{api_url}{transcriber.endpoint_path}"
         try:
             events = transcriber.transcribe(audio_ref)
         except TranscriptionError as exc:
             raise SmokeFailure(
-                f"Transcription API smoke failed at {api_url}/transcribe: {exc}"
+                f"Transcription API smoke failed at {endpoint_url}: {exc}"
             ) from exc
 
     return TranscriptionSmokeResult(
-        endpoint_url=f"{api_url}/transcribe",
+        endpoint_url=endpoint_url,
         audio_uri=audio_ref.uri,
         stream_id=audio_ref.stream_id,
+        request_mode=request_mode,
         timeout_seconds=timeout_seconds,
         event_count=len(events),
     )
